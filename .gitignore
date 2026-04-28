@@ -1,0 +1,7 @@
+venv/*
+data/*
+src/__pycache__/*
+example_code_*
+*.pyc
+results/*
+references/*
