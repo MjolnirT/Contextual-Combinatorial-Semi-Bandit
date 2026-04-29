@@ -61,6 +61,7 @@ class SquareCB(Semibandit):
             'numrff': int(params.get('numrff', 512)),
             'rff_sigma': float(params.get('rff_sigma', 1.0)),
             'depth': int(params.get('depth', 2)),
+            'normalize_features': bool(params.get('normalize_features', True)),
             'seed': seed,
         }
         self.model = None

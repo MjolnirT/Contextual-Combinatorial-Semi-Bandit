@@ -68,7 +68,8 @@ class OnlinePerArmRegressor:
     """Sigmoid-output per-arm regressor with one BCE step per call to ``step``."""
 
     def __init__(self, ld_dim, model_type='linear', initlr=0.05, tzero=100.0,
-                 device='cpu', numrff=512, rff_sigma=1.0, depth=2, seed=None):
+                 device='cpu', numrff=512, rff_sigma=1.0, depth=2, seed=None,
+                 normalize_features=True):
         self.device = torch.device(device)
         if seed is not None:
             torch.manual_seed(int(seed))
@@ -87,17 +88,29 @@ class OnlinePerArmRegressor:
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(
             self.opt, _make_lr_lambda(tzero)
         )
+        self.normalize_features = bool(normalize_features)
+
+    @staticmethod
+    def _l2_normalize_rows(phi):
+        # Per-row L2 normalization with a tiny floor so SGD operates on
+        # unit-scale inputs regardless of dataset feature magnitudes.
+        norms = np.linalg.norm(phi, axis=-1, keepdims=True)
+        return phi / np.clip(norms, 1e-12, None)
 
     @torch.no_grad()
     def predict(self, features):
-        phi = torch.as_tensor(np.asarray(features), dtype=torch.float32,
-                              device=self.device)
+        f = np.asarray(features, dtype=np.float32)
+        if self.normalize_features:
+            f = self._l2_normalize_rows(f)
+        phi = torch.as_tensor(f, dtype=torch.float32, device=self.device)
         scores = self.model(phi)
         return scores.detach().cpu().numpy().astype(np.float64)
 
     def step(self, phi_played, y_played):
-        phi = torch.as_tensor(np.asarray(phi_played), dtype=torch.float32,
-                              device=self.device)
+        f = np.asarray(phi_played, dtype=np.float32)
+        if self.normalize_features:
+            f = self._l2_normalize_rows(f)
+        phi = torch.as_tensor(f, dtype=torch.float32, device=self.device)
         y = torch.as_tensor(np.asarray(y_played), dtype=torch.float32,
                             device=self.device)
 
