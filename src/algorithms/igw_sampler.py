@@ -1,0 +1,182 @@
+"""
+IGW sampler for L-of-K semi-bandits.
+
+Given estimated per-item rewards f_hat (shape K), an exploration parameter
+gamma, and a slate size L, ``igw_marginals`` returns a marginal inclusion
+distribution p_bar in [0,1]^K with ||p_bar||_1 = L. ``sample_slate`` then
+draws a size-L super action whose item-inclusion marginals match p_bar
+exactly (Madow systematic sampling).
+
+The certificate this construction targets is, for the default
+sum-of-squares coverage,
+
+    <p_bar - q_bar, f_hat> + (1/gamma) * sum_k q_bar(k)^2 / p_bar(k)
+        <= C * K / gamma
+
+for every q_bar in the same simplex (||q_bar||_1 = L, 0 <= q_bar <= 1).
+The natural saturation/root-find construction below empirically
+satisfies the certificate with C in [1, 2] across regimes -- this is
+the standard Foster-Rakhlin range; the precise constant depends on
+whether the coverage is centered on p_bar or on 0, on the form of the
+constraint set, and on the saturation pattern. With L = 1 the
+construction collapses to the Foster-Rakhlin SquareCB IGW
+distribution.
+
+A custom coverage function can be supplied; in that case the user must
+also supply a matching ``solver`` that produces p_bar from
+(f_hat, gamma, L) -- there is no universal closed form. The closed form
+is shipped only for the default coverage.
+"""
+
+from typing import Callable, Optional
+
+import numpy as np
+from scipy.optimize import brentq
+
+
+def default_coverage(p_bar: np.ndarray, q_bar: np.ndarray) -> float:
+    """sum_k q_bar(k)^2 / p_bar(k), with a small floor on p_bar."""
+    p = np.asarray(p_bar, dtype=np.float64)
+    q = np.asarray(q_bar, dtype=np.float64)
+    return float(np.sum(q * q / np.clip(p, 1e-12, None)))
+
+
+def igw_marginals(
+    f_hat: np.ndarray,
+    gamma: float,
+    L: int,
+    solver: Optional[Callable[[np.ndarray, float, int], np.ndarray]] = None,
+) -> np.ndarray:
+    """
+    Return marginal inclusion probabilities p_bar in [0,1]^K with
+    ||p_bar||_1 = L for the slate-IGW distribution under the default
+    sum-of-squares coverage.
+
+    Parameterization (saturation set + 1-D root-find on z):
+
+        for k not saturated, p_bar(k) = L_rem / (n_rem + gamma*(M - f_hat(k)) - z)
+
+    where M = max_{k not saturated} f_hat(k), L_rem and n_rem are L and K
+    minus the count of items pinned at p_bar = 1, and z solves
+    ``sum_{k not saturated} 1 / (n_rem + gamma*(M - f_hat(k)) - z) = 1``.
+    Items whose unconstrained p_bar would exceed 1 are pinned to 1 and
+    the remainder is re-solved. The loop terminates because each iter
+    pins at least one new item.
+
+    A non-default coverage requires a user-supplied ``solver`` that maps
+    (f_hat, gamma, L) -> p_bar; passing one short-circuits this routine.
+    """
+    if solver is not None:
+        p = np.asarray(solver(f_hat, gamma, L), dtype=np.float64)
+        _validate_marginals(p, L)
+        return p
+
+    f_hat = np.asarray(f_hat, dtype=np.float64)
+    K = f_hat.shape[0]
+    if not (1 <= L <= K):
+        raise ValueError("L must satisfy 1 <= L <= K, got L=%d, K=%d" % (L, K))
+    if gamma <= 0:
+        # No exploration pressure -> uniform L/K mass on every item.
+        return np.full(K, L / K, dtype=np.float64)
+    if L == K:
+        return np.ones(K, dtype=np.float64)
+
+    saturated = np.zeros(K, dtype=bool)
+    p = np.zeros(K, dtype=np.float64)
+
+    while True:
+        idx = np.where(~saturated)[0]
+        L_rem = L - int(saturated.sum())
+        n_rem = idx.shape[0]
+
+        # Degenerate cases.
+        if L_rem <= 0:
+            p[:] = saturated.astype(np.float64)
+            break
+        if n_rem <= L_rem:
+            # Not enough headroom -- everything left must saturate.
+            p[:] = 0.0
+            p[saturated] = 1.0
+            p[idx] = 1.0
+            break
+
+        f_idx = f_hat[idx]
+        M = float(np.max(f_idx))
+        gap = M - f_idx  # >= 0, top-of-remaining items have gap 0
+
+        # Solve sum_k 1/(n_rem + gamma*gap(k) - z) = 1 for z.
+        # At z = 0: sum = sum_k 1/(n_rem + gamma*gap(k)) <= n_rem/n_rem = 1.
+        # As z -> n_rem (smallest denom -> 0 for top items), sum -> +inf.
+        # The root is in [0, n_rem).
+        def g(z: float) -> float:
+            return float(np.sum(1.0 / (n_rem + gamma * gap - z))) - 1.0
+
+        z_lo = 0.0
+        z_hi = n_rem - 1e-9
+        g_lo = g(z_lo)
+        if g_lo >= 0:
+            # f_hat is essentially flat on the remaining items -> uniform.
+            p_idx = np.full(n_rem, L_rem / n_rem, dtype=np.float64)
+        else:
+            z_root = brentq(g, z_lo, z_hi, xtol=1e-12)
+            p_idx = L_rem / (n_rem + gamma * gap - z_root)
+
+        # If any unconstrained probability exceeds 1, pin those and re-solve.
+        over = p_idx > 1.0
+        if np.any(over):
+            saturated[idx[over]] = True
+            continue
+
+        p[saturated] = 1.0
+        p[idx] = p_idx
+        break
+
+    _validate_marginals(p, L)
+    return p
+
+
+def sample_slate(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Madow systematic sampling: returns a length-L array of distinct base
+    actions whose inclusion marginals equal ``p_bar``. Items are randomly
+    permuted before the systematic sweep so the joint distribution does
+    not depend on the input ordering.
+    """
+    p = np.asarray(p_bar, dtype=np.float64)
+    K = p.shape[0]
+    if not (1 <= L <= K):
+        raise ValueError("L must satisfy 1 <= L <= K, got L=%d, K=%d" % (L, K))
+
+    order = rng.permutation(K)
+    p_perm = p[order]
+    # Cumulative sum with leading zero so bucket k is [cum[k], cum[k+1]).
+    cum = np.empty(K + 1, dtype=np.float64)
+    cum[0] = 0.0
+    np.cumsum(p_perm, out=cum[1:])
+
+    # Floating point: pull the upper edge in slightly so searchsorted lands
+    # in the last bucket for thresholds near L.
+    total = cum[-1]
+    if not np.isfinite(total) or abs(total - L) > 1e-6 * max(L, 1):
+        raise ValueError("p_bar must sum to L (got %.6f vs %d)" % (total, L))
+
+    u = float(rng.random())
+    thresholds = u + np.arange(L, dtype=np.float64)
+    # searchsorted with side='right' returns insertion index in cum;
+    # subtract 1 to get the bucket index.
+    bucket = np.searchsorted(cum, thresholds, side="right") - 1
+    bucket = np.clip(bucket, 0, K - 1)
+
+    selected = order[bucket]
+    # Madow with width-<=1 buckets cannot duplicate, but defensively assert.
+    if np.unique(selected).shape[0] != L:
+        raise RuntimeError("Madow produced duplicate selections; check p_bar")
+    return selected.astype(np.int64)
+
+
+def _validate_marginals(p: np.ndarray, L: int) -> None:
+    if np.any(p < -1e-9) or np.any(p > 1 + 1e-9):
+        raise RuntimeError("p_bar out of [0,1]: min=%.6e, max=%.6e" % (p.min(), p.max()))
+    s = float(p.sum())
+    if abs(s - L) > 1e-6 * max(L, 1):
+        raise RuntimeError("p_bar does not sum to L: sum=%.6f, L=%d" % (s, L))

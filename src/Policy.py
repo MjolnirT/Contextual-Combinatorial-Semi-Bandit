@@ -34,13 +34,13 @@ class RegressionPolicy(Policy):
     def __init__(self, model):
         self.model = model
     def get_action(self, context):
-        features = context.get_ld_features()
+        features = np.asarray(context.get_ld_features())
         L = context.get_L()
         preds = self.model.predict(features)
         idx = np.argsort(preds)
         return idx[len(idx)-L:len(idx)]
     def get_weighted_action(self, context, weight):
-        features = context.get_ld_features()
+        features = np.asarray(context.get_ld_features())
         L = context.get_L()
         preds = self.model.predict(features)
         if "clusters" in dir(context):
@@ -86,7 +86,7 @@ class RegressionPolicy(Policy):
             for x in contexts:
                 f = np.vstack((f, x.get_ld_features()))
             features=f[1:,:]
-        preds = self.model.predict(features)
+        preds = self.model.predict(np.asarray(features))
         out = []
         curr_idx = 0
         for x in contexts:
@@ -107,7 +107,7 @@ class ClassificationPolicy(Policy):
     def get_action(self, context):
         L = context.get_L()
         assert L == 1, "Cannot implement reduction to classification for Semibandits"
-        features = context.get_features()
+        features = np.asarray(context.get_features())
         return [int(x) for x in self.model.predict(features)]
     def get_all_actions(self, contexts, features=None):
         Ls = np.array([x.get_L() for x in contexts])
@@ -120,6 +120,6 @@ class ClassificationPolicy(Policy):
             for x in contexts:
                 f = np.vstack((f, x.get_features()))
             features = f[1:,:]
-        preds = self.model.predict(features)
+        preds = self.model.predict(np.asarray(features))
         return [int(x) for x in preds]
 

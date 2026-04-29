@@ -11,6 +11,7 @@ from .eels import EELS
 from .eels2 import EELS2
 from .mini_monster import MiniMonster
 from .semi_exp4 import SemiExp4
+from .square_cb import SquareCB
 
 __all__ = [
     "Semibandit",
@@ -20,4 +21,5 @@ __all__ = [
     "EELS2",
     "MiniMonster",
     "SemiExp4",
+    "SquareCB",
 ]

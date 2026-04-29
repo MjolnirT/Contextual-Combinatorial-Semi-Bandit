@@ -11,6 +11,7 @@ from algorithms.eels import EELS
 from algorithms.eels2 import EELS2
 from algorithms.mini_monster import MiniMonster
 from algorithms.semi_exp4 import SemiExp4
+from algorithms.square_cb import SquareCB
 
 __all__ = [
     "Semibandit",
@@ -20,4 +21,5 @@ __all__ = [
     "EELS2",
     "MiniMonster",
     "SemiExp4",
+    "SquareCB",
 ]

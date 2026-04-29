@@ -5,3 +5,4 @@ example_code_*
 *.pyc
 results/*
 references/*
+logs/*
