@@ -99,11 +99,12 @@ def init_run(args, params=None, tag=None):
     the run.
     """
     params = params or {}
-    parts = [args.dataset, f"T{args.T}", f"L{args.L}", f"I{args.I}", args.alg]
+    parts = [args.dataset, args.alg]
     if getattr(args, "learning_alg", None):
         parts.append(args.learning_alg)
-    if getattr(args, "param", None) is not None:
-        parts.append(f"p{args.param}")
+    sampler = params.get("sampler")
+    if sampler and sampler != "marginal":
+        parts.append(sampler)
     name = "-".join(parts)
 
     config = {
