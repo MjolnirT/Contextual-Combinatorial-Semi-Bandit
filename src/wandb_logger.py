@@ -88,15 +88,19 @@ def make_logger(project=None, entity=None, name=None, config=None,
     return _WandbLogger(run)
 
 
-def init_run(args, params=None, tag=None):
+def init_run(args, params=None, tag=None, B=None):
     """Build a wandb run for any semibandit experiment from ``run_semibandits.py`` args.
 
     ``args`` is the parsed argparse Namespace (needs T, L, I, dataset, alg,
     learning_alg, param). ``params`` is the optional dict that will be
     forwarded to ``alg.play(T, params=...)``; its non-internal entries are
-    captured in ``wandb.config`` under a ``params/`` prefix. Returns a logger
-    that should be placed in ``params['logger']`` and ``finish()``-ed after
-    the run.
+    captured in ``wandb.config`` under a ``params/`` prefix. ``B`` is the
+    simulator instance — when provided, ``K`` (arms per context) and the
+    total available context count are recorded in the run config so the
+    actual T_effective is recoverable from wandb.
+
+    Returns a logger that should be placed in ``params['logger']`` and
+    ``finish()``-ed after the run.
     """
     params = params or {}
     parts = [args.dataset, args.alg]
@@ -116,6 +120,13 @@ def init_run(args, params=None, tag=None):
         "learning_alg": getattr(args, "learning_alg", None),
         "param": getattr(args, "param", None),
     }
+    if B is not None:
+        K = getattr(B, "K", None)
+        if K is not None:
+            config["K"] = int(K)
+        n_ctx = getattr(getattr(B, "contexts", None), "X", None)
+        if n_ctx is not None:
+            config["n_contexts"] = int(n_ctx)
     for k, v in params.items():
         if k == "logger":
             continue

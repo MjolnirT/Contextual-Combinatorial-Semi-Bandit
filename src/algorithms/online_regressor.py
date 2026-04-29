@@ -69,7 +69,7 @@ class OnlinePerArmRegressor:
 
     def __init__(self, ld_dim, model_type='linear', initlr=0.05, tzero=100.0,
                  device='cpu', numrff=512, rff_sigma=1.0, depth=2, seed=None,
-                 normalize_features=True):
+                 normalize_features=True, y_scale=1.0):
         self.device = torch.device(device)
         if seed is not None:
             torch.manual_seed(int(seed))
@@ -89,6 +89,9 @@ class OnlinePerArmRegressor:
             self.opt, _make_lr_lambda(tzero)
         )
         self.normalize_features = bool(normalize_features)
+        self.y_scale = float(y_scale)
+        if self.y_scale <= 0:
+            raise ValueError(f"y_scale must be > 0, got {self.y_scale}")
 
     @staticmethod
     def _l2_normalize_rows(phi):
@@ -104,15 +107,21 @@ class OnlinePerArmRegressor:
             f = self._l2_normalize_rows(f)
         phi = torch.as_tensor(f, dtype=torch.float32, device=self.device)
         scores = self.model(phi)
-        return scores.detach().cpu().numpy().astype(np.float64)
+        # Predictions are returned in the original target scale: the
+        # network learns y/y_scale internally; multiply back here so
+        # downstream IGW sees scores comparable to true rewards.
+        return scores.detach().cpu().numpy().astype(np.float64) * self.y_scale
 
     def step(self, phi_played, y_played):
         f = np.asarray(phi_played, dtype=np.float32)
         if self.normalize_features:
             f = self._l2_normalize_rows(f)
         phi = torch.as_tensor(f, dtype=torch.float32, device=self.device)
-        y = torch.as_tensor(np.asarray(y_played), dtype=torch.float32,
-                            device=self.device)
+        # Target normalization: train on y/y_scale so the internal MSE
+        # loss landscape stays in the [0,1]-ish regime regardless of the
+        # raw reward magnitude.
+        y = torch.as_tensor(np.asarray(y_played) / self.y_scale,
+                            dtype=torch.float32, device=self.device)
 
         self.opt.zero_grad()
         scores = self.model(phi)
