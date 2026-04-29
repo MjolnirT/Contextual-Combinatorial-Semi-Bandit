@@ -6,3 +6,4 @@ example_code_*
 results/*
 references/*
 logs/*
+wandb/*

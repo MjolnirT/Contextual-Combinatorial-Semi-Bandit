@@ -36,6 +36,11 @@ class Semibandit(object):
         self.verbose=verbose
         self.init(T, params=params)
         self.val_scores = []
+        logger = params.get('logger') if isinstance(params, dict) else None
+        opt_against = params.get('opt_against') if isinstance(params, dict) else None
+        log_every = int(params.get('log_every', 1)) if isinstance(params, dict) else 1
+        cum_simple = 0.0
+        cum_opt = 0.0
         for t in range(T):
             if t != 0 and np.log2(t+1) == int(np.log2(t+1)) and verbose:
                 print("t = %d, r = %0.3f, ave_regret = %0.3f" % (t, np.cumsum(self.reward)[len(self.reward)-1], (np.cumsum(self.opt_reward) - np.cumsum(self.reward))[len(self.reward)-1]/(t+1)), flush=True)
@@ -49,9 +54,27 @@ class Semibandit(object):
                 break
             p = self.get_action(x)
             r = self.B.get_slate_reward(p)
-            o = self.B.get_best_reward()
+            if opt_against == 'oracle':
+                cr = np.asarray(self.B.curr_r, dtype=np.float64).ravel()
+                L = x.get_L()
+                o = float(np.sort(cr)[-L:].sum())
+            else:
+                o = self.B.get_best_reward()
             self.reward.append(r)
             self.opt_reward.append(o)
+            if logger is not None and getattr(logger, 'active', False):
+                simple_r = float(np.sum(r))
+                opt_r = float(np.sum(o))
+                cum_simple += simple_r
+                cum_opt += opt_r
+                if (t + 1) % log_every == 0:
+                    logger.log({
+                        'reward/simple': simple_r,
+                        'reward/avg_cum': cum_simple / (t + 1),
+                        'reward/optimal': opt_r,
+                        'regret/simple': opt_r - simple_r,
+                        'regret/avg_cum': (cum_opt - cum_simple) / (t + 1),
+                    }, step=t + 1)
             if loss:
                 self.update(x, p, [1.0-a for a in self.B.get_base_rewards(p)], self.B.get_slate_reward(p))
             else:
