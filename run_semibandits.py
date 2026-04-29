@@ -41,7 +41,7 @@ def parse_args():
     parser.add_argument('--alg', action='store', default='all',
                         choices=['mini', 'eps', 'lin', 'sqcb', 'random'])
     parser.add_argument('--learning_alg', action='store', default=None,
-                        choices=[None, 'gb2', 'gb5', 'tree', 'lin'])
+                        choices=[None, 'gb2', 'gb5', 'tree', 'lin', 'rff', 'nonlinear'])
     parser.add_argument('--param', action='store', default=None)
     parser.add_argument('--wandb', action='store_true',
                         help='log per-round SquareCB metrics to wandb '
@@ -56,6 +56,12 @@ def parse_args():
                              "simulator's get_best_reward() (typically the "
                              "best fixed policy Pi*); 'oracle' uses the "
                              "top-L hindsight oracle sum(top-L of curr_r).")
+    parser.add_argument('--sampler', action='store', default='marginal',
+                        choices=['marginal', 'bandit'],
+                        help="SquareCB IGW sampler: 'marginal' (per-arm "
+                             "IGW marginals + Madow; default) or 'bandit' "
+                             "(IGW over C(K,L) macro-actions via rejection "
+                             "sampling).")
     return parser.parse_args()
 
 
@@ -68,6 +74,11 @@ def make_learning_alg(name):
         return lambda: sklearn.tree.DecisionTreeRegressor(max_depth=2)
     if name == "lin":
         return lambda: sklearn.linear_model.LinearRegression()
+    if name in ("rff", "nonlinear"):
+        # SquareCB-only model-type selectors; legacy learning_alg gate
+        # in the sqcb branch needs a non-None marker, but the actual
+        # regressor factory is not used (online torch model takes over).
+        return name
     return None
 
 
@@ -112,14 +123,17 @@ def main():
 
     learning_alg = make_learning_alg(Args.learning_alg)
 
-    logger = None
-    if Args.wandb:
-        from wandb_logger import init_run
-        logger = init_run(Args, tag=Args.wandb_tag)
+    state = {'logger': None}
 
     def attach_logger(params):
-        if logger is not None:
-            params['logger'] = logger
+        # Lazy init so the wandb run is created with the algorithm's
+        # actual hyperparams (e.g. gamma_multiplier, mu, eps, delta) in
+        # wandb.config, not just the bare CLI args.
+        if Args.wandb and state['logger'] is None:
+            from wandb_logger import init_run
+            state['logger'] = init_run(Args, params, tag=Args.wandb_tag)
+        if state['logger'] is not None:
+            params['logger'] = state['logger']
         if Args.opt_against is not None:
             params['opt_against'] = Args.opt_against
         return params
@@ -210,31 +224,49 @@ def main():
             print("Cannot run SquareCB without learning algorithm")
             sys.exit(1)
         S = SquareCB(B, learning_alg=learning_alg, classification=False)
+        # learning_alg doubles as the model_type selector for the online
+        # torch regressor: lin -> linear, rff -> rff, nonlinear -> nonlinear.
+        # Legacy sklearn names (gb2/gb5/tree) fall back to a linear regressor
+        # for compatibility with old run-name conventions.
+        _MODEL_TYPE = {'lin': 'linear', 'rff': 'rff', 'nonlinear': 'nonlinear'}
+        sqcb_model_type = _MODEL_TYPE.get(Args.learning_alg, 'linear')
+        # Append a CamelCased sampler suffix when not the default so that
+        # different samplers don't overwrite each other's saved files
+        # (and stay compatible with the notebook's [a-zA-Z][a-zA-Z0-9]*
+        # learner regex). marginal: "lin"; bandit: "linBandit".
+        sqcb_file_alg = Args.learning_alg + (
+            '' if Args.sampler == 'marginal'
+            else Args.sampler[0].upper() + Args.sampler[1:])
         if Args.param is not None:
-            if os.path.isfile(outdir + "sqcb_%s_%0.3f_rewards_%d.out" % (Args.learning_alg, Args.param, Args.I)):
+            if os.path.isfile(outdir + "sqcb_%s_%0.3f_rewards_%d.out" % (sqcb_file_alg, Args.param, Args.I)):
                 print('---- ALREADY DONE ----')
                 sys.exit(0)
             start = time.time()
             (r, reg, val_tmp) = S.play(Args.T, verbose=True, validate=Bval,
                                        params=attach_logger({'gamma_multiplier': Args.param,
+                                                             'model_type': sqcb_model_type,
+                                                             'sampler': Args.sampler,
                                                              'seed': Args.I,
                                                              'log_every': Args.log_every}))
             stop = time.time()
-            np.savetxt(outdir + "sqcb_%s_%0.3f_rewards_%d.out" % (Args.learning_alg, Args.param, Args.I), r)
-            np.savetxt(outdir + "sqcb_%s_%0.3f_validation_%d.out" % (Args.learning_alg, Args.param, Args.I), val_tmp)
-            np.savetxt(outdir + "sqcb_%s_%0.3f_time_%d.out" % (Args.learning_alg, Args.param, Args.I), np.array([stop - start]))
+            np.savetxt(outdir + "sqcb_%s_%0.3f_rewards_%d.out" % (sqcb_file_alg, Args.param, Args.I), r)
+            np.savetxt(outdir + "sqcb_%s_%0.3f_validation_%d.out" % (sqcb_file_alg, Args.param, Args.I), val_tmp)
+            np.savetxt(outdir + "sqcb_%s_%0.3f_time_%d.out" % (sqcb_file_alg, Args.param, Args.I), np.array([stop - start]))
         else:
-            if os.path.isfile(outdir + "sqcb_%s_default_rewards_%d.out" % (Args.learning_alg, Args.I)):
+            if os.path.isfile(outdir + "sqcb_%s_default_rewards_%d.out" % (sqcb_file_alg, Args.I)):
                 print('---- ALREADY DONE ----')
                 sys.exit(0)
             start = time.time()
             (r, reg, val_tmp) = S.play(Args.T, verbose=True, validate=Bval,
-                                       params=attach_logger({'seed': Args.I,
+                                       params=attach_logger({'gamma_multiplier': 1.0,
+                                                             'model_type': sqcb_model_type,
+                                                             'sampler': Args.sampler,
+                                                             'seed': Args.I,
                                                              'log_every': Args.log_every}))
             stop = time.time()
-            np.savetxt(outdir + "sqcb_%s_default_rewards_%d.out" % (Args.learning_alg, Args.I), r)
-            np.savetxt(outdir + "sqcb_%s_default_validation_%d.out" % (Args.learning_alg, Args.I), val_tmp)
-            np.savetxt(outdir + "sqcb_%s_default_time_%d.out" % (Args.learning_alg, Args.I), np.array([stop - start]))
+            np.savetxt(outdir + "sqcb_%s_default_rewards_%d.out" % (sqcb_file_alg, Args.I), r)
+            np.savetxt(outdir + "sqcb_%s_default_validation_%d.out" % (sqcb_file_alg, Args.I), val_tmp)
+            np.savetxt(outdir + "sqcb_%s_default_time_%d.out" % (sqcb_file_alg, Args.I), np.array([stop - start]))
 
     if Args.alg == "random":
         # The base Semibandit class is the uniform-random slate baseline:
@@ -252,8 +284,8 @@ def main():
         np.savetxt(outdir + "random_validation_%d.out" % (Args.I), val_tmp)
         np.savetxt(outdir + "random_time_%d.out" % (Args.I), np.array([stop - start]))
 
-    if logger is not None:
-        logger.finish()
+    if state['logger'] is not None:
+        state['logger'].finish()
 
     print("---- DONE ----")
 

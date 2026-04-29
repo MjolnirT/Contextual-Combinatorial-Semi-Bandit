@@ -95,17 +95,15 @@ class OnlinePerArmRegressor:
         scores = self.model(phi)
         return scores.detach().cpu().numpy().astype(np.float64)
 
-    def step(self, phi_played, y_played, w_played):
+    def step(self, phi_played, y_played):
         phi = torch.as_tensor(np.asarray(phi_played), dtype=torch.float32,
                               device=self.device)
         y = torch.as_tensor(np.asarray(y_played), dtype=torch.float32,
                             device=self.device)
-        w = torch.as_tensor(np.asarray(w_played), dtype=torch.float32,
-                            device=self.device)
 
         self.opt.zero_grad()
         scores = self.model(phi)
-        loss = (w * (scores - y).pow(2)).mean()
+        loss = (scores - y).pow(2).mean()
         loss.backward()
         self.opt.step()
         self.scheduler.step()

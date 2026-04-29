@@ -3,7 +3,8 @@ import numpy as np
 from Policy import RegressionPolicy
 
 from .base import Semibandit
-from .igw_sampler import default_coverage, igw_marginals, sample_slate
+from .igw_sampler import (default_coverage, igw_bandit_sample_slate,
+                          igw_marginals, sample_slate)
 from .online_regressor import OnlinePerArmRegressor
 
 
@@ -13,15 +14,16 @@ class SquareCB(Semibandit):
     per-arm regression updates.
 
     Each round:
-      1. Predict per-item rewards f_hat(phi_k) in [0,1] for all K arms via
-         a sigmoid-output regressor.
+      1. Predict per-item rewards f_hat(phi_k) for all K arms via the
+         online regressor.
       2. IGW turns scores into marginal inclusion probabilities p_bar in
          [0,1]^K with ||p_bar||_1 = L (default sum-of-squares coverage; a
          custom coverage + solver pair can be plugged in via params).
          Madow systematic sampling draws a size-L super action.
       3. After observing per-arm rewards y on the played arms A, take ONE
-         BCE gradient step on the L-row mini-batch (phi[A], y, w) where
-         w = 1/p_bar[A] when ips_weighting is enabled.
+         plain MSE gradient step on the L-row mini-batch (phi[A], y) — the
+         canonical SquareCB regression oracle, matching ``learnOnline`` in
+         ``example_code_oe2d``.
 
     Restricted to RegressionPolicy: per-arm features must be available via
     ``x.get_ld_features()``. Enumeration / classification reductions are
@@ -44,8 +46,9 @@ class SquareCB(Semibandit):
         self.gamma_schedule = params.get('gamma_schedule', 'sqrt_kt')
         self.coverage = params.get('coverage', default_coverage)
         self.solver = params.get('solver', None)
-
-        self.ips_weighting = bool(params.get('ips_weighting', True))
+        self.sampler = params.get('sampler', 'marginal')
+        if self.sampler not in ('marginal', 'bandit'):
+            raise ValueError(f"Unknown sampler: {self.sampler!r}")
 
         seed = params.get('seed', None)
         self.rng = np.random.default_rng(seed)
@@ -78,8 +81,6 @@ class SquareCB(Semibandit):
     def _gamma(self) -> float:
         if callable(self.gamma_schedule):
             return float(self.gamma_schedule(self.t, self.B.K, self.B.L))
-        if self.gamma_schedule == 'const':
-            return self.gamma_multiplier
         return self.gamma_multiplier * np.sqrt(self.B.K * self.t / self.B.L)
 
     def _predict_per_arm(self, x) -> np.ndarray:
@@ -91,9 +92,13 @@ class SquareCB(Semibandit):
         L = x.get_L()
         f = self._predict_per_arm(x)
         gamma = self._gamma()
-        p_bar = igw_marginals(f, gamma, L, solver=self.solver)
-        slate = sample_slate(p_bar, L, self.rng)
-        self.imp_weights = p_bar
+        if self.sampler == 'bandit':
+            slate = igw_bandit_sample_slate(f, gamma, L, self.rng)
+            self.imp_weights = None
+        else:
+            p_bar = igw_marginals(f, gamma, L, solver=self.solver)
+            slate = sample_slate(p_bar, L, self.rng)
+            self.imp_weights = p_bar
         self.action = slate
         return slate
 
@@ -103,12 +108,7 @@ class SquareCB(Semibandit):
         phi_played = features[A]
         y_played = np.asarray(y_vec, dtype=np.float64)
 
-        if self.ips_weighting:
-            w_played = 1.0 / np.clip(self.imp_weights[A], 1e-12, None)
-        else:
-            w_played = np.ones_like(y_played)
-
-        self.model.step(phi_played, y_played, w_played)
+        self.model.step(phi_played, y_played)
 
         self.action = None
         self.imp_weights = None

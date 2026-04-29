@@ -28,6 +28,7 @@ also supply a matching ``solver`` that produces p_bar from
 is shipped only for the default coverage.
 """
 
+from math import comb
 from typing import Callable, Optional
 
 import numpy as np
@@ -180,3 +181,73 @@ def _validate_marginals(p: np.ndarray, L: int) -> None:
     s = float(p.sum())
     if abs(s - L) > 1e-6 * max(L, 1):
         raise RuntimeError("p_bar does not sum to L: sum=%.6f, L=%d" % (s, L))
+
+
+def igw_bandit_sample_slate(
+    scores: np.ndarray,
+    gamma: float,
+    L: int,
+    rng: Optional[np.random.Generator] = None,
+    max_retries: int = 10000,
+) -> np.ndarray:
+    """
+    Sample a size-L slate by treating each L-subset of [K] as a single
+    macro-action and applying scalar SquareCB IGW over them. Sampling
+    proceeds via standard rejection.
+
+    Macro-action scoring is additive: f(S) = sum_{k in S} scores[k].
+    With M = C(K, L) and gap(S) = f_max - f(S) (>= 0), IGW assigns
+
+        p(S) = 1 / (M + gamma * gap(S))     for S != S*
+        p(S*) = 1 - sum_{S != S*} p(S)
+
+    Rejection sampler:
+        propose S ~ Uniform(C(K, L))
+        accept with probability  M / (M + gamma * gap(S))   in [0, 1]
+        otherwise resample
+
+    The argmax slate S* has gap=0 and is always accepted, bounding the
+    expected loop length by O(M); for typical gamma the accept rate
+    stays close to 1 and the loop terminates in a few iterations. A
+    safety ``max_retries`` falls back to S* to guarantee termination.
+
+    Parameters
+    ----------
+    scores : array_like, shape (K,)
+        Per-arm reward predictions f_hat(k).
+    gamma : float
+        IGW exploration parameter.
+    L : int
+        Slate size, 1 <= L <= K.
+    rng : np.random.Generator, optional
+    max_retries : int
+        Hard cap on rejection iterations before falling back to S*.
+
+    Returns
+    -------
+    slate : np.ndarray of shape (L,), dtype int64
+        Sorted indices of the sampled macro-action.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    f = np.asarray(scores, dtype=np.float64)
+    K = int(f.shape[0])
+    if not (1 <= L <= K):
+        raise ValueError(f"L={L} out of range [1, {K}]")
+
+    top_L = np.argpartition(f, -L)[-L:]
+    f_max = float(f[top_L].sum())
+    M = float(comb(K, L))
+    g = float(gamma)
+
+    for _ in range(max_retries):
+        a = rng.choice(K, size=L, replace=False)
+        gap = f_max - float(f[a].sum())
+        # gap can be a tiny negative due to fp; clamp to >= 0.
+        if gap < 0.0:
+            gap = 0.0
+        accept_prob = M / (M + g * gap)
+        if rng.random() < accept_prob:
+            return np.sort(a).astype(np.int64)
+    # Fallback: argmax slate (always accepted under IGW).
+    return np.sort(top_L).astype(np.int64)
