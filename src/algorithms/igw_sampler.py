@@ -175,6 +175,70 @@ def sample_slate(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndar
     return selected.astype(np.int64)
 
 
+def depround_slate(p_bar: np.ndarray, L: int,
+                   rng: Optional[np.random.Generator] = None) -> np.ndarray:
+    """
+    Dependent rounding (Gandhi-Khuller-Parthasarathy-Srinivasan 2002).
+
+    Converts a marginal distribution ``p_bar in [0,1]^K`` with
+    ``sum(p_bar) == L`` into a 0/1 slate of size exactly L such that each
+    item k is included with probability exactly ``p_bar[k]``.
+
+    Pair-update rule: while two coordinates p_i, p_j are both in (0, 1),
+    let alpha = min(1 - p_i, p_j) and beta = min(p_i, 1 - p_j); with
+    probability beta/(alpha+beta) take the "alpha move" (p_i += alpha,
+    p_j -= alpha), else the "beta move" (p_i -= beta, p_j += beta).
+    Each iteration drives at least one of {p_i, p_j} to {0, 1}, so the
+    loop terminates in <= K iterations. Item-level marginals and the
+    total sum are preserved exactly in expectation; under floating-point
+    arithmetic the sum is preserved to within ~1e-12, and any residual
+    drift is snapped at the end via top-L selection.
+
+    Compared to Madow systematic sampling (``sample_slate``):
+      * Same marginal guarantee (P[k in S] = p_bar[k]).
+      * Different joint law -- DepRound has weaker negative correlation
+        between distinct items, but is still negatively associated.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    p = np.asarray(p_bar, dtype=np.float64).copy()
+    K = p.shape[0]
+    _validate_marginals(p, L)
+    L = int(L)
+
+    EPS = 1e-12
+    fractional = np.where((p > EPS) & (p < 1 - EPS))[0].tolist()
+    iters = 0
+    while len(fractional) >= 2 and iters < 4 * K:
+        # Pop two fractional indices; update them; push back any that
+        # remain fractional.
+        i = fractional.pop()
+        j = fractional.pop()
+        alpha = min(1.0 - p[i], p[j])
+        beta = min(p[i], 1.0 - p[j])
+        if alpha + beta <= 0:
+            # Already integral due to fp drift; just continue.
+            iters += 1
+            continue
+        if rng.random() < beta / (alpha + beta):
+            p[i] += alpha
+            p[j] -= alpha
+        else:
+            p[i] -= beta
+            p[j] += beta
+        # Re-check fractional status of i and j.
+        for k in (i, j):
+            if EPS < p[k] < 1.0 - EPS:
+                fractional.append(int(k))
+        iters += 1
+
+    selected = np.where(p > 0.5)[0]
+    if selected.shape[0] != L:
+        # Floating-point drift: pick the L largest entries.
+        selected = np.argsort(-p, kind='stable')[:L]
+    return np.sort(selected).astype(np.int64)
+
+
 def _validate_marginals(p: np.ndarray, L: int) -> None:
     if np.any(p < -1e-9) or np.any(p > 1 + 1e-9):
         raise RuntimeError("p_bar out of [0,1]: min=%.6e, max=%.6e" % (p.min(), p.max()))

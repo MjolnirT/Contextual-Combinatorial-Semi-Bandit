@@ -3,8 +3,8 @@ import numpy as np
 from Policy import RegressionPolicy
 
 from .base import Semibandit
-from .igw_sampler import (default_coverage, igw_bandit_sample_slate,
-                          igw_marginals, sample_slate)
+from .igw_sampler import (default_coverage, depround_slate,
+                          igw_bandit_sample_slate, igw_marginals, sample_slate)
 from .online_regressor import OnlinePerArmRegressor
 
 
@@ -47,7 +47,7 @@ class SquareCB(Semibandit):
         self.coverage = params.get('coverage', default_coverage)
         self.solver = params.get('solver', None)
         self.sampler = params.get('sampler', 'marginal')
-        if self.sampler not in ('marginal', 'bandit'):
+        if self.sampler not in ('marginal', 'bandit', 'depround'):
             raise ValueError(f"Unknown sampler: {self.sampler!r}")
 
         seed = params.get('seed', None)
@@ -99,7 +99,10 @@ class SquareCB(Semibandit):
             self.imp_weights = None
         else:
             p_bar = igw_marginals(f, gamma, L, solver=self.solver)
-            slate = sample_slate(p_bar, L, self.rng)
+            if self.sampler == 'depround':
+                slate = depround_slate(p_bar, L, self.rng)
+            else:  # 'marginal' (Madow systematic)
+                slate = sample_slate(p_bar, L, self.rng)
             self.imp_weights = p_bar
         self.action = slate
         return slate
