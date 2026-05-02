@@ -2,10 +2,23 @@ import numpy as np
 
 from Policy import RegressionPolicy
 
+from typing import Optional
+
 from .base import Semibandit
 from .igw_sampler import (default_coverage, depround_slate,
                           igw_bandit_sample_slate, igw_marginals, sample_slate)
-from .online_regressor import OnlinePerArmRegressor
+from .online_oracles import OnlineOracle, make_oracle
+
+
+# Param keys consumed by SquareCB itself (not forwarded to the oracle).
+# ``model_type`` is the oracle selector and is read separately.
+# Legacy keys (``weight``, ``mu``, ``eps``, ``delta``, ``train_all``) come
+# from non-sqcb algorithms reusing this same params dict path; ignore them.
+_SQUARECB_KEYS = frozenset({
+    'gamma_multiplier', 'gamma_schedule', 'coverage', 'solver',
+    'sampler', 'logger', 'opt_against', 'log_every', 'model_type',
+    'weight', 'mu', 'eps', 'delta', 'train_all',
+})
 
 
 class SquareCB(Semibandit):
@@ -53,19 +66,17 @@ class SquareCB(Semibandit):
         seed = params.get('seed', None)
         self.rng = np.random.default_rng(seed)
 
-        self._regressor_params = {
-            'model_type': params.get('model_type', 'linear'),
-            'initlr': float(params.get('initlr', 0.05)),
-            'tzero': float(params.get('tzero', 100.0)),
-            'device': params.get('device', 'cpu'),
-            'numrff': int(params.get('numrff', 512)),
-            'rff_sigma': float(params.get('rff_sigma', 1.0)),
-            'depth': int(params.get('depth', 2)),
-            'normalize_features': bool(params.get('normalize_features', True)),
-            'y_scale': float(params.get('y_scale', 1.0)),
-            'seed': seed,
+        # ``model_type`` is the oracle short name (linear / rff / nonlinear /
+        # gb5 / gb2 / xgb / ...). Anything in ``params`` that isn't a
+        # SquareCB-level key is forwarded to the oracle factory; the
+        # registry filters per-oracle kwargs and each oracle owns its own
+        # defaults. Adding a new oracle does not require touching SquareCB.
+        self._oracle_name = params.get('model_type', 'linear')
+        self._oracle_params = {
+            k: v for k, v in params.items() if k not in _SQUARECB_KEYS
         }
-        self.model = None
+        self._oracle_params.setdefault('seed', seed)
+        self.model: Optional[OnlineOracle] = None
 
         self.reward = []
         self.opt_reward = []
@@ -74,21 +85,22 @@ class SquareCB(Semibandit):
         self.action = None
         self.imp_weights = None
 
-    def _build_model(self, ld_dim):
+    def _build_model(self, ld_dim) -> OnlineOracle:
         if self.model is None:
-            self.model = OnlinePerArmRegressor(
-                ld_dim=int(ld_dim), **self._regressor_params
+            self.model = make_oracle(
+                self._oracle_name, ld_dim=int(ld_dim), **self._oracle_params
             )
+        return self.model
 
     def _gamma(self) -> float:
         if callable(self.gamma_schedule):
-            return float(self.gamma_schedule(self.t, self.B.K, self.B.L))
+            return float(self.gamma_schedule(self.t, self.B.K, self.B.L))  # type: ignore[arg-type]
         return self.gamma_multiplier * np.sqrt(self.B.K * self.t / self.B.L)
 
     def _predict_per_arm(self, x) -> np.ndarray:
         features = np.asarray(x.get_ld_features(), dtype=np.float64)
-        self._build_model(features.shape[1])
-        return self.model.predict(features)
+        model = self._build_model(features.shape[1])
+        return model.predict(features)
 
     def get_action(self, x):
         L = x.get_L()
@@ -108,12 +120,14 @@ class SquareCB(Semibandit):
         return slate
 
     def update(self, x, A, y_vec, r):
+        del r  # Unused: SquareCB updates from per-arm y_vec on the played arms.
         features = np.asarray(x.get_ld_features(), dtype=np.float64)
         A = np.asarray(A, dtype=np.int64)
         phi_played = features[A]
         y_played = np.asarray(y_vec, dtype=np.float64)
 
-        self.model.step(phi_played, y_played)
+        model = self._build_model(features.shape[1])
+        model.step(phi_played, y_played)
 
         self.action = None
         self.imp_weights = None
