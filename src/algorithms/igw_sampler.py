@@ -7,25 +7,25 @@ distribution p_bar in [0,1]^K with ||p_bar||_1 = L. ``sample_slate`` then
 draws a size-L super action whose item-inclusion marginals match p_bar
 exactly (Madow systematic sampling).
 
-The certificate this construction targets is, for the default
-sum-of-squares coverage,
+``igw_marginals`` solves a log-barrier exploration program:
 
-    <p_bar - q_bar, f_hat> + (1/gamma) * sum_k q_bar(k)^2 / p_bar(k)
-        <= C * K / gamma
+    max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
+    s.t.    sum_k p_k = L,    0 < p_k <= 1
 
-for every q_bar in the same simplex (||q_bar||_1 = L, 0 <= q_bar <= 1).
-The natural saturation/root-find construction below empirically
-satisfies the certificate with C in [1, 2] across regimes -- this is
-the standard Foster-Rakhlin range; the precise constant depends on
-whether the coverage is centered on p_bar or on 0, on the form of the
-constraint set, and on the saturation pattern. With L = 1 the
-construction collapses to the Foster-Rakhlin SquareCB IGW
-distribution.
+Larger gamma -> smaller log-barrier weight -> sharper p (more exploit),
+matching the standard SquareCB direction where gamma_t grows with t.
+KKT (ignoring the upper cap) yields p_k = (1/gamma) / (lambda - f_hat_k)
+with lambda > max_k f_hat_k chosen so sum_k p_k = L; items whose p_k
+would exceed 1 are pinned to 1 and the remainder re-solved.
 
-A custom coverage function can be supplied; in that case the user must
-also supply a matching ``solver`` that produces p_bar from
-(f_hat, gamma, L) -- there is no universal closed form. The closed form
-is shipped only for the default coverage.
+Empirical motivation: head-to-head against the legacy sum-of-squares
+coverage IGW (closed-form 1/(n + gamma*gap - z) saturation solve), the
+log-barrier program produced strictly better cumulative reward across
+{linear, gb2, xgb2} oracles and gamma_multiplier in {0.1, 1, 10} on the
+xor benchmark; the SS solver was removed.
+
+A user can short-circuit the closed-form solve by supplying a custom
+``solver(f_hat, gamma, L) -> p_bar``.
 """
 
 from math import comb
@@ -35,13 +35,6 @@ import numpy as np
 from scipy.optimize import brentq
 
 
-def default_coverage(p_bar: np.ndarray, q_bar: np.ndarray) -> float:
-    """sum_k q_bar(k)^2 / p_bar(k), with a small floor on p_bar."""
-    p = np.asarray(p_bar, dtype=np.float64)
-    q = np.asarray(q_bar, dtype=np.float64)
-    return float(np.sum(q * q / np.clip(p, 1e-12, None)))
-
-
 def igw_marginals(
     f_hat: np.ndarray,
     gamma: float,
@@ -49,23 +42,23 @@ def igw_marginals(
     solver: Optional[Callable[[np.ndarray, float, int], np.ndarray]] = None,
 ) -> np.ndarray:
     """
-    Return marginal inclusion probabilities p_bar in [0,1]^K with
-    ||p_bar||_1 = L for the slate-IGW distribution under the default
-    sum-of-squares coverage.
+    Marginal inclusion probabilities p_bar in [0,1]^K with sum = L from
+    the log-barrier exploration program
 
-    Parameterization (saturation set + 1-D root-find on z):
+        max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
+        s.t.    sum_k p_k = L,    0 < p_k <= 1.
 
-        for k not saturated, p_bar(k) = L_rem / (n_rem + gamma*(M - f_hat(k)) - z)
+    With coef = 1/gamma and gap_k = f_max - f_hat_k (>= 0), the KKT
+    optimum is p_k = coef / (u + gap_k) where u = lambda - f_max > 0
+    solves the 1-D equation
 
-    where M = max_{k not saturated} f_hat(k), L_rem and n_rem are L and K
-    minus the count of items pinned at p_bar = 1, and z solves
-    ``sum_{k not saturated} 1 / (n_rem + gamma*(M - f_hat(k)) - z) = 1``.
-    Items whose unconstrained p_bar would exceed 1 are pinned to 1 and
-    the remainder is re-solved. The loop terminates because each iter
-    pins at least one new item.
+        sum_k 1/(u + gap_k) = L_rem / coef.
 
-    A non-default coverage requires a user-supplied ``solver`` that maps
-    (f_hat, gamma, L) -> p_bar; passing one short-circuits this routine.
+    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf
+    (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -L_rem/coef < 0,
+    so brentq finds the unique root. Items whose p_k would exceed 1 are
+    pinned to 1 and the remainder re-solved (saturation loop terminates
+    because each pass pins at least one new item).
     """
     if solver is not None:
         p = np.asarray(solver(f_hat, gamma, L), dtype=np.float64)
@@ -76,11 +69,19 @@ def igw_marginals(
     K = f_hat.shape[0]
     if not (1 <= L <= K):
         raise ValueError("L must satisfy 1 <= L <= K, got L=%d, K=%d" % (L, K))
-    if gamma <= 0:
-        # No exploration pressure -> uniform L/K mass on every item.
-        return np.full(K, L / K, dtype=np.float64)
     if L == K:
         return np.ones(K, dtype=np.float64)
+    if gamma <= 0:
+        # No exploitation pressure -> log barrier dominates -> uniform L/K.
+        return np.full(K, L / K, dtype=np.float64)
+
+    coef = 1.0 / float(gamma)
+    if not np.isfinite(coef) or coef <= 0:
+        # gamma -> +inf: barrier vanishes -> top-L pure exploit.
+        p = np.zeros(K, dtype=np.float64)
+        top = np.argpartition(f_hat, -L)[-L:]
+        p[top] = 1.0
+        return p
 
     saturated = np.zeros(K, dtype=bool)
     p = np.zeros(K, dtype=np.float64)
@@ -90,39 +91,34 @@ def igw_marginals(
         L_rem = L - int(saturated.sum())
         n_rem = idx.shape[0]
 
-        # Degenerate cases.
         if L_rem <= 0:
             p[:] = saturated.astype(np.float64)
             break
         if n_rem <= L_rem:
-            # Not enough headroom -- everything left must saturate.
             p[:] = 0.0
             p[saturated] = 1.0
             p[idx] = 1.0
             break
 
         f_idx = f_hat[idx]
-        M = float(np.max(f_idx))
-        gap = M - f_idx  # >= 0, top-of-remaining items have gap 0
+        f_max = float(np.max(f_idx))
+        gap = f_max - f_idx  # >= 0; top-of-remaining items have gap 0
 
-        # Solve sum_k 1/(n_rem + gamma*gap(k) - z) = 1 for z.
-        # At z = 0: sum = sum_k 1/(n_rem + gamma*gap(k)) <= n_rem/n_rem = 1.
-        # As z -> n_rem (smallest denom -> 0 for top items), sum -> +inf.
-        # The root is in [0, n_rem).
-        def g(z: float) -> float:
-            return float(np.sum(1.0 / (n_rem + gamma * gap - z))) - 1.0
+        target = L_rem / coef
 
-        z_lo = 0.0
-        z_hi = n_rem - 1e-9
-        g_lo = g(z_lo)
-        if g_lo >= 0:
-            # f_hat is essentially flat on the remaining items -> uniform.
-            p_idx = np.full(n_rem, L_rem / n_rem, dtype=np.float64)
-        else:
-            z_root = brentq(g, z_lo, z_hi, xtol=1e-12)
-            p_idx = L_rem / (n_rem + gamma * gap - z_root)
+        def h(u: float) -> float:
+            return float(np.sum(1.0 / (u + gap))) - target
 
-        # If any unconstrained probability exceeds 1, pin those and re-solve.
+        # h(u) <= n_rem/u so any u_hi >= n_rem/target gives h(u_hi) <= 0;
+        # double for fp safety until the sign flip is confirmed.
+        u_lo = 1e-18
+        u_hi = max(1.0, n_rem / target)
+        while h(u_hi) > 0.0 and u_hi < 1e30:
+            u_hi *= 2.0
+
+        u_root = float(brentq(h, u_lo, u_hi, xtol=1e-14))  # type: ignore[arg-type]
+        p_idx = coef / (u_root + gap)
+
         over = p_idx > 1.0
         if np.any(over):
             saturated[idx[over]] = True

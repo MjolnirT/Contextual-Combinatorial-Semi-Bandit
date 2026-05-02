@@ -5,8 +5,8 @@ from Policy import RegressionPolicy
 from typing import Optional
 
 from .base import Semibandit
-from .igw_sampler import (default_coverage, depround_slate,
-                          igw_bandit_sample_slate, igw_marginals, sample_slate)
+from .igw_sampler import (depround_slate, igw_bandit_sample_slate,
+                          igw_marginals, sample_slate)
 from .online_oracles import OnlineOracle, make_oracle
 
 
@@ -19,8 +19,10 @@ class SquareCB(Semibandit):
       1. Predict per-item rewards f_hat(phi_k) for all K arms via the
          online regressor.
       2. IGW turns scores into marginal inclusion probabilities p_bar in
-         [0,1]^K with ||p_bar||_1 = L (default sum-of-squares coverage; a
-         custom coverage + solver pair can be plugged in via params).
+         [0,1]^K with ||p_bar||_1 = L by maximizing
+         ``<p, f_hat> + (1/gamma) * sum_k log(p_k)`` (the log-barrier
+         exploration program; see ``igw_sampler.igw_marginals``). A
+         custom solver can be plugged in via ``params['solver']``.
          Madow systematic sampling draws a size-L super action.
       3. After observing per-arm rewards y on the played arms A, take ONE
          plain MSE gradient step on the L-row mini-batch (phi[A], y) — the
@@ -45,7 +47,6 @@ class SquareCB(Semibandit):
 
         self.gamma_multiplier = float(params.get('gamma_multiplier', 1.0))
         self.gamma_schedule = params.get('gamma_schedule', 'sqrt_kt')
-        self.coverage = params.get('coverage', default_coverage)
         self.solver = params.get('solver', None)
         self.sampler = params.get('sampler', 'marginal')
         if self.sampler not in ('marginal', 'bandit', 'depround'):
