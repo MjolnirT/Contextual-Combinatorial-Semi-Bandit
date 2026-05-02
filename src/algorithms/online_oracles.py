@@ -6,11 +6,12 @@ An oracle implements two methods:
     predict(features: np.ndarray[K, d]) -> np.ndarray[K]      # original-y units
     step(phi_played: np.ndarray[L, d], y_played: np.ndarray[L]) -> float
 
-``make_oracle(name, ld_dim, **params)`` selects the implementation.
-Per-oracle keyword filtering keeps SquareCB free of oracle-specific
-plumbing — it can hand the union of all oracle params to the registry.
+``make_oracle(name, ld_dim, **params)`` selects the implementation. The
+factory introspects each oracle's __init__ signature, so SquareCB can
+forward its full params dict and unrelated keys are dropped silently.
 """
 
+import inspect
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -24,60 +25,42 @@ class OnlineOracle(Protocol):
     def step(self, phi_played: np.ndarray, y_played: np.ndarray) -> float: ...
 
 
-# Torch (sigmoid head) oracle sub-types share one class.
-_TORCH_TYPES = {"linear", "rff", "nonlinear"}
+# ``gb`` / ``xgb`` (no number) fall back to max_depth in kwargs (default 5).
+_DEPTH_ALIASES = {"gb2": 2, "gb5": 5, "xgb2": 2, "xgb5": 5}
 
-# GB oracle aliases → max_depth. ``gb`` reads ``max_depth`` from kwargs.
-_GB_DEPTH = {"gb5": 5, "gb2": 2, "gb": None}
 
-# XGBoost oracle aliases → max_depth. ``xgb`` reads ``max_depth`` from kwargs.
-_XGB_DEPTH = {"xgb5": 5, "xgb2": 2, "xgb": None}
-
-_TORCH_KEYS = {
-    "initlr", "tzero", "device", "numrff", "rff_sigma", "depth",
-    "normalize_features", "y_scale", "seed",
-}
-_GB_KEYS = {
-    "learning_rate", "buffer_size", "fit_every", "max_trees",
-    "min_samples_leaf", "warmup",
-    "normalize_features", "y_scale", "seed",
-}
-_XGB_KEYS = {
-    "learning_rate", "buffer_size", "fit_every", "num_boost_round",
-    "reg_lambda", "reg_alpha", "min_child_weight",
-    "subsample", "colsample_bytree", "tree_method", "warmup",
-    "normalize_features", "y_scale", "seed",
-}
+def _kwargs_for(cls, params, *, drop=()):
+    """Keep params accepted by ``cls.__init__``, minus any in ``drop``
+    (used to avoid clashes with kwargs the caller passes explicitly)."""
+    accepted = set(inspect.signature(cls).parameters) - {"self", *drop}
+    return {k: v for k, v in params.items() if k in accepted}
 
 
 def make_oracle(name: str, ld_dim: int, **params) -> OnlineOracle:
-    """Construct an online oracle by short name.
-
-    Unknown kwargs are dropped (SquareCB passes the union of all oracle
-    params; each implementation only consumes its own).
-    """
-    if name in _TORCH_TYPES:
+    if name in {"linear", "rff", "nonlinear"}:
         from .online_regressor import OnlinePerArmRegressor
-        kwargs = {k: v for k, v in params.items() if k in _TORCH_KEYS}
-        return OnlinePerArmRegressor(ld_dim=int(ld_dim), model_type=name, **kwargs)
+        return OnlinePerArmRegressor(
+            ld_dim=int(ld_dim), model_type=name,
+            **_kwargs_for(OnlinePerArmRegressor, params,
+                          drop=("ld_dim", "model_type")),
+        )
 
-    if name in _GB_DEPTH:
+    if name in {"gb", "gb2", "gb5"}:
         from .online_gb_oracle import OnlineGBOracle
-        kwargs = {k: v for k, v in params.items() if k in _GB_KEYS}
-        depth = _GB_DEPTH[name]
-        if depth is None:
-            depth = int(params.get("max_depth", 5))
-        return OnlineGBOracle(ld_dim=int(ld_dim), max_depth=int(depth), **kwargs)
+        depth = _DEPTH_ALIASES.get(name, int(params.get("max_depth", 5)))
+        return OnlineGBOracle(
+            ld_dim=int(ld_dim), max_depth=int(depth),
+            **_kwargs_for(OnlineGBOracle, params,
+                          drop=("ld_dim", "max_depth")),
+        )
 
-    if name in _XGB_DEPTH:
+    if name in {"xgb", "xgb2", "xgb5"}:
         from .online_xgb_oracle import OnlineXGBOracle
-        kwargs = {k: v for k, v in params.items() if k in _XGB_KEYS}
-        depth = _XGB_DEPTH[name]
-        if depth is None:
-            depth = int(params.get("max_depth", 5))
-        return OnlineXGBOracle(ld_dim=int(ld_dim), max_depth=int(depth), **kwargs)
+        depth = _DEPTH_ALIASES.get(name, int(params.get("max_depth", 5)))
+        return OnlineXGBOracle(
+            ld_dim=int(ld_dim), max_depth=int(depth),
+            **_kwargs_for(OnlineXGBOracle, params,
+                          drop=("ld_dim", "max_depth")),
+        )
 
-    raise ValueError(
-        f"Unknown oracle name: {name!r}. "
-        f"Known: {sorted(_TORCH_TYPES | _GB_DEPTH.keys() | _XGB_DEPTH.keys())}"
-    )
+    raise ValueError(f"Unknown oracle name: {name!r}")

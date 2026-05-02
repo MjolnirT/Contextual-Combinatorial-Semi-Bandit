@@ -10,17 +10,6 @@ from .igw_sampler import (default_coverage, depround_slate,
 from .online_oracles import OnlineOracle, make_oracle
 
 
-# Param keys consumed by SquareCB itself (not forwarded to the oracle).
-# ``model_type`` is the oracle selector and is read separately.
-# Legacy keys (``weight``, ``mu``, ``eps``, ``delta``, ``train_all``) come
-# from non-sqcb algorithms reusing this same params dict path; ignore them.
-_SQUARECB_KEYS = frozenset({
-    'gamma_multiplier', 'gamma_schedule', 'coverage', 'solver',
-    'sampler', 'logger', 'opt_against', 'log_every', 'model_type',
-    'weight', 'mu', 'eps', 'delta', 'train_all',
-})
-
-
 class SquareCB(Semibandit):
     """
     SquareCB / IGW for the L-of-K semi-bandit setting with online
@@ -39,8 +28,7 @@ class SquareCB(Semibandit):
          ``example_code_oe2d``.
 
     Restricted to RegressionPolicy: per-arm features must be available via
-    ``x.get_ld_features()``. Enumeration / classification reductions are
-    no longer supported by this class.
+    ``x.get_ld_features()``.
     """
 
     def __init__(self, B, learning_alg=None, classification=False):
@@ -53,7 +41,7 @@ class SquareCB(Semibandit):
         self.policy_type = RegressionPolicy
 
     def init(self, T, params=None):
-        params = params or {}
+        params = dict(params or {})
 
         self.gamma_multiplier = float(params.get('gamma_multiplier', 1.0))
         self.gamma_schedule = params.get('gamma_schedule', 'sqrt_kt')
@@ -66,16 +54,11 @@ class SquareCB(Semibandit):
         seed = params.get('seed', None)
         self.rng = np.random.default_rng(seed)
 
-        # ``model_type`` is the oracle short name (linear / rff / nonlinear /
-        # gb5 / gb2 / xgb / ...). Anything in ``params`` that isn't a
-        # SquareCB-level key is forwarded to the oracle factory; the
-        # registry filters per-oracle kwargs and each oracle owns its own
-        # defaults. Adding a new oracle does not require touching SquareCB.
+        # Forward everything to the oracle factory; make_oracle filters
+        # per-oracle, so SquareCB-only / legacy keys are dropped silently.
         self._oracle_name = params.get('model_type', 'linear')
-        self._oracle_params = {
-            k: v for k, v in params.items() if k not in _SQUARECB_KEYS
-        }
-        self._oracle_params.setdefault('seed', seed)
+        params.setdefault('seed', seed)
+        self._oracle_params = params
         self.model: Optional[OnlineOracle] = None
 
         self.reward = []
@@ -97,14 +80,10 @@ class SquareCB(Semibandit):
             return float(self.gamma_schedule(self.t, self.B.K, self.B.L))  # type: ignore[arg-type]
         return self.gamma_multiplier * np.sqrt(self.B.K * self.t / self.B.L)
 
-    def _predict_per_arm(self, x) -> np.ndarray:
-        features = np.asarray(x.get_ld_features(), dtype=np.float64)
-        model = self._build_model(features.shape[1])
-        return model.predict(features)
-
     def get_action(self, x):
         L = x.get_L()
-        f = self._predict_per_arm(x)
+        features = np.asarray(x.get_ld_features(), dtype=np.float64)
+        f = self._build_model(features.shape[1]).predict(features)
         gamma = self._gamma()
         if self.sampler == 'bandit':
             slate = igw_bandit_sample_slate(f, gamma, L, self.rng)
@@ -126,8 +105,7 @@ class SquareCB(Semibandit):
         phi_played = features[A]
         y_played = np.asarray(y_vec, dtype=np.float64)
 
-        model = self._build_model(features.shape[1])
-        model.step(phi_played, y_played)
+        self._build_model(features.shape[1]).step(phi_played, y_played)
 
         self.action = None
         self.imp_weights = None
