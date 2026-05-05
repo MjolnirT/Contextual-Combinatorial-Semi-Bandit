@@ -7,3 +7,5 @@ results/*
 references/*
 logs/*
 wandb/*
+tune/
+tests/

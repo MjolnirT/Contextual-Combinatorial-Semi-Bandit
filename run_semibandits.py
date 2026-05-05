@@ -25,7 +25,7 @@ if SRC_DIR not in sys.path:
 import Simulators
 import settings
 
-from algorithms import EpsGreedy, LinUCB, MiniMonster, SquareCB, RandomPolicy
+from algorithms import EpsGreedy, LinUCB, MiniMonster, SquareCB, RegCB, RandomPolicy
 
 
 def parse_args():
@@ -39,9 +39,10 @@ def parse_args():
     parser.add_argument('--I', action='store', default=0, type=int)
     parser.add_argument('--noise', action='store', default=None)
     parser.add_argument('--alg', action='store', default='all',
-                        choices=['mini', 'eps', 'lin', 'sqcb', 'random'])
+                        choices=['mini', 'eps', 'lin', 'sqcb', 'regcb', 'random'])
     parser.add_argument('--learning_alg', action='store', default=None,
-                        choices=[None, 'gb2', 'gb5', 'tree', 'lin', 'rff', 'nonlinear'])
+                        choices=[None, 'gb2', 'gb5', 'tree', 'lin', 'rff', 'nonlinear',
+                                 'xgb', 'xgb2', 'xgb5'])
     parser.add_argument('--param', action='store', default=None)
     parser.add_argument('--wandb', action='store_true',
                         help='log per-round SquareCB metrics to wandb '
@@ -57,12 +58,55 @@ def parse_args():
                              "best fixed policy Pi*); 'oracle' uses the "
                              "top-L hindsight oracle sum(top-L of curr_r).")
     parser.add_argument('--sampler', action='store', default='marginal',
-                        choices=['marginal', 'bandit'],
+                        choices=['marginal', 'bandit', 'depround'],
                         help="SquareCB IGW sampler: 'marginal' (per-arm "
-                             "IGW marginals + Madow; default) or 'bandit' "
-                             "(IGW over C(K,L) macro-actions via rejection "
-                             "sampling).")
+                             "IGW marginals + Madow systematic, default), "
+                             "'depround' (per-arm IGW marginals + dependent "
+                             "rounding), or 'bandit' (IGW over C(K,L) "
+                             "macro-actions via rejection sampling).")
+    parser.add_argument('--y_scale', action='store', default=1.0, type=float,
+                        help="SquareCB target scaling: regressor trains on "
+                             "y/y_scale and predicts in original-y units. "
+                             "Use 4.0 for relevance datasets where y is in "
+                             "{0..4} (default 1.0 — no scaling).")
+    # XGBoost-oracle hyperparams (forwarded only when set; otherwise the
+    # oracle's own defaults apply). Surfaced so the tuning runs in
+    # src/SQUARECB_XGBOOST_TUNING.md can be reproduced from the CLI.
+    parser.add_argument('--xgb_max_depth', type=int, default=None)
+    parser.add_argument('--xgb_learning_rate', type=float, default=None)
+    parser.add_argument('--xgb_min_child_weight', type=float, default=None)
+    parser.add_argument('--xgb_fit_every', type=int, default=None)
+    parser.add_argument('--xgb_warmup', type=int, default=None)
+    parser.add_argument('--xgb_num_boost_round', type=int, default=None)
+    parser.add_argument('--xgb_buffer_size', type=int, default=None)
+    parser.add_argument('--xgb_reg_lambda', type=float, default=None)
+    parser.add_argument('--xgb_reg_alpha', type=float, default=None)
+    # RegCB-specific knobs (per src/REGCB_IMPLEMENTATION_PLAN.md). RegCB is
+    # restricted to L=1; --param is the confidence slack ``beta``.
+    parser.add_argument('--regcb_mode', choices=['optimistic', 'elimination'],
+                        default='optimistic')
+    parser.add_argument('--regcb_warmup', type=int, default=50)
+    parser.add_argument('--regcb_binsearch_steps', type=int, default=20)
+    parser.add_argument('--regcb_synth_weight', type=float, default=1.0)
+    parser.add_argument('--regcb_reward_min', type=float, default=0.0)
+    parser.add_argument('--regcb_reward_max', type=float, default=4.0)
+    parser.add_argument('--regcb_ridge_alpha', type=float, default=1.0)
+    parser.add_argument('--regcb_gb_n_estimators', type=int, default=100)
+    parser.add_argument('--regcb_refit_per_step', action='store_true',
+                        help="Use the eager paper-faithful binary search "
+                             "(refit oracle every round per arm per binsearch "
+                             "step). Default: lazy FALCON-style refit at "
+                             "exponential epochs only.")
     return parser.parse_args()
+
+
+def _xgb_overrides(Args):
+    """Collect XGBoost-oracle kwargs explicitly set on the CLI."""
+    keys = ('max_depth', 'learning_rate', 'min_child_weight',
+            'fit_every', 'warmup', 'num_boost_round',
+            'buffer_size', 'reg_lambda', 'reg_alpha')
+    return {k: v for k in keys
+            if (v := getattr(Args, 'xgb_' + k)) is not None}
 
 
 def make_learning_alg(name):
@@ -74,10 +118,10 @@ def make_learning_alg(name):
         return lambda: sklearn.tree.DecisionTreeRegressor(max_depth=2)
     if name == "lin":
         return lambda: sklearn.linear_model.LinearRegression()
-    if name in ("rff", "nonlinear"):
+    if name in ("rff", "nonlinear", "xgb", "xgb5", "xgb2"):
         # SquareCB-only model-type selectors; legacy learning_alg gate
         # in the sqcb branch needs a non-None marker, but the actual
-        # regressor factory is not used (online torch model takes over).
+        # regressor factory is not used (online oracle takes over).
         return name
     return None
 
@@ -96,11 +140,7 @@ def main():
     if Args.param is not None:
         Args.param = float(Args.param)
 
-    loop = True
-    if Args.dataset in ('mslr', 'mslrsmall', 'mslr30k', 'yahoo'):
-        loop = False
-
-    B = Simulators.DatasetBandit(dataset=Args.dataset, L=Args.L, loop=loop, metric=None, noise=Args.noise)
+    B = Simulators.DatasetBandit(dataset=Args.dataset, L=Args.L, loop=True, metric=None, noise=Args.noise)
     Bval = None
     if Args.dataset != 'yahoo':
         Bval = Simulators.DatasetBandit(dataset=Args.dataset, L=Args.L, loop=False, metric=None, noise=Args.noise)
@@ -131,7 +171,7 @@ def main():
         # wandb.config, not just the bare CLI args.
         if Args.wandb and state['logger'] is None:
             from wandb_logger import init_run
-            state['logger'] = init_run(Args, params, tag=Args.wandb_tag)
+            state['logger'] = init_run(Args, params, tag=Args.wandb_tag, B=B)
         if state['logger'] is not None:
             params['logger'] = state['logger']
         if Args.opt_against is not None:
@@ -224,11 +264,14 @@ def main():
             print("Cannot run SquareCB without learning algorithm")
             sys.exit(1)
         S = SquareCB(B, learning_alg=learning_alg, classification=False)
-        # learning_alg doubles as the model_type selector for the online
-        # torch regressor: lin -> linear, rff -> rff, nonlinear -> nonlinear.
-        # Legacy sklearn names (gb2/gb5/tree) fall back to a linear regressor
-        # for compatibility with old run-name conventions.
-        _MODEL_TYPE = {'lin': 'linear', 'rff': 'rff', 'nonlinear': 'nonlinear'}
+        # learning_alg picks the SquareCB online oracle:
+        #   lin/rff/nonlinear -> torch regressor (online SGD on a sigmoid head)
+        #   gb5/gb2           -> online gradient-boosted tree oracle (sklearn)
+        #   xgb/xgb5/xgb2     -> online XGBoost oracle (incremental booster)
+        # 'tree' has no online analogue here and falls back to 'linear'.
+        _MODEL_TYPE = {'lin': 'linear', 'rff': 'rff', 'nonlinear': 'nonlinear',
+                       'gb5': 'gb5', 'gb2': 'gb2',
+                       'xgb': 'xgb', 'xgb5': 'xgb5', 'xgb2': 'xgb2'}
         sqcb_model_type = _MODEL_TYPE.get(Args.learning_alg, 'linear')
         # Append a CamelCased sampler suffix when not the default so that
         # different samplers don't overwrite each other's saved files
@@ -246,8 +289,10 @@ def main():
                                        params=attach_logger({'gamma_multiplier': Args.param,
                                                              'model_type': sqcb_model_type,
                                                              'sampler': Args.sampler,
+                                                             'y_scale': Args.y_scale,
                                                              'seed': Args.I,
-                                                             'log_every': Args.log_every}))
+                                                             'log_every': Args.log_every,
+                                                             **_xgb_overrides(Args)}))
             stop = time.time()
             np.savetxt(outdir + "sqcb_%s_%0.3f_rewards_%d.out" % (sqcb_file_alg, Args.param, Args.I), r)
             np.savetxt(outdir + "sqcb_%s_%0.3f_validation_%d.out" % (sqcb_file_alg, Args.param, Args.I), val_tmp)
@@ -261,12 +306,54 @@ def main():
                                        params=attach_logger({'gamma_multiplier': 1.0,
                                                              'model_type': sqcb_model_type,
                                                              'sampler': Args.sampler,
+                                                             'y_scale': Args.y_scale,
                                                              'seed': Args.I,
-                                                             'log_every': Args.log_every}))
+                                                             'log_every': Args.log_every,
+                                                             **_xgb_overrides(Args)}))
             stop = time.time()
             np.savetxt(outdir + "sqcb_%s_default_rewards_%d.out" % (sqcb_file_alg, Args.I), r)
             np.savetxt(outdir + "sqcb_%s_default_validation_%d.out" % (sqcb_file_alg, Args.I), val_tmp)
             np.savetxt(outdir + "sqcb_%s_default_time_%d.out" % (sqcb_file_alg, Args.I), np.array([stop - start]))
+
+    if Args.alg == "regcb":
+        # RegCB is a contextual-bandit (L=1) algorithm; reject larger L early.
+        if Args.L != 1:
+            print("RegCB requires --L 1 (contextual bandit, not semibandit).")
+            sys.exit(1)
+        if Args.learning_alg not in ("lin", "gb5"):
+            print("RegCB v1 supports --learning_alg in {'lin', 'gb5'}; "
+                  f"got {Args.learning_alg!r}")
+            sys.exit(1)
+        beta = 0.1 if Args.param is None else float(Args.param)
+        # Filename keeps mode + oracle + beta to disambiguate runs.
+        regcb_tag = f"{Args.regcb_mode}_{Args.learning_alg}"
+        out_prefix = outdir + "regcb_%s_%0.3f" % (regcb_tag, beta)
+        if os.path.isfile(out_prefix + "_rewards_%d.out" % Args.I):
+            print('---- ALREADY DONE ----')
+            sys.exit(0)
+        R = RegCB(B, learning_alg=Args.learning_alg, classification=False)
+        params = attach_logger({
+            'param': beta,
+            'beta': beta,
+            'regcb_mode': Args.regcb_mode,
+            'learning_alg_name': Args.learning_alg,
+            'regcb_warmup': Args.regcb_warmup,
+            'regcb_binsearch_steps': Args.regcb_binsearch_steps,
+            'regcb_synth_weight': Args.regcb_synth_weight,
+            'regcb_reward_min': Args.regcb_reward_min,
+            'regcb_reward_max': Args.regcb_reward_max,
+            'regcb_ridge_alpha': Args.regcb_ridge_alpha,
+            'regcb_gb_n_estimators': Args.regcb_gb_n_estimators,
+            'regcb_refit_per_step': Args.regcb_refit_per_step,
+            'seed': Args.I,
+            'log_every': Args.log_every,
+        })
+        start = time.time()
+        (r, reg, val_tmp) = R.play(Args.T, verbose=True, validate=Bval, params=params)
+        stop = time.time()
+        np.savetxt(out_prefix + "_rewards_%d.out" % Args.I, r)
+        np.savetxt(out_prefix + "_validation_%d.out" % Args.I, val_tmp)
+        np.savetxt(out_prefix + "_time_%d.out" % Args.I, np.array([stop - start]))
 
     if Args.alg == "random":
         # The base Semibandit class is the uniform-random slate baseline:

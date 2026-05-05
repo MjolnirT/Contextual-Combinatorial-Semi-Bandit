@@ -109,6 +109,11 @@ def init_run(args, params=None, tag=None, B=None):
     sampler = params.get("sampler")
     if sampler and sampler != "marginal":
         parts.append(sampler)
+    # RegCB has two modes (optimistic / elimination) with the same alg+oracle
+    # name; without this, both runs would share a wandb display name.
+    regcb_mode = params.get("regcb_mode")
+    if args.alg == "regcb" and regcb_mode:
+        parts.append(regcb_mode)
     name = "-".join(parts)
 
     config = {
