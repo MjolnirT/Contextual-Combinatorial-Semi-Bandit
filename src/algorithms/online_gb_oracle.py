@@ -1,59 +1,76 @@
 """
-Online gradient-boosted regression-tree oracle for SquareCB / IGW.
+Online gradient-boosted regression-tree oracle for SquareCB / IGW, using
+the same backbone as RegCB's ``gb5`` oracle.
 
 Approach
 --------
-Functional gradient descent in the squared-loss landscape over a sliding
-replay buffer:
+Wrap ``sklearn.ensemble.GradientBoostingRegressor(n_estimators=100,
+max_depth=max_depth)`` — the same model class used by
+``IncrementalRegressionTreeEnsemble2`` in RegCB — and refit from scratch
+on RegCB's training schedule:
 
-  - Keep a FIFO buffer of the last W (phi, y) pairs seen on played arms.
-  - Every ``fit_every`` rounds (after a small warmup), compute residuals
-        r = y - F(phi)
-    over the buffer, where F is the current ensemble prediction, and fit
-    one new ``sklearn.tree.DecisionTreeRegressor(max_depth)`` to (phi, r).
-    Append it to the ensemble with shrinkage ``learning_rate``.
-  - Cap the ensemble at ``max_trees`` (drop oldest first) to bound predict
-    cost as T grows.
+    training_points = [burn_in + 2^k for k = 0, 1, 2, ...]   (capped at T)
 
-Each new tree is one functional-gradient step on the buffered loss — the
-direct analogue of "one SGD step per round" for the linear oracle, lifted
-to function space. A buffer is required because a depth-5 tree fit on the
-L played samples (often L=3) overfits trivially; the buffer gives the
-weak learner enough rows to find a meaningful split structure.
+Each ``step()`` appends ``(phi_played, y_played)`` to a FIFO buffer.
+When ``self.t`` matches one of the training points, the oracle re-fits a
+fresh ``GradientBoostingRegressor`` on the entire buffer. Between
+training points predictions come from the most recent fit; before the
+first fit (i.e. while ``t <= burn_in``) ``predict`` returns zeros, which
+is uniform under IGW.
 
-This class is not a scikit-learn estimator and does not implement
-``fit``/``partial_fit``; it follows the small ``OnlineOracle`` protocol
-in ``online_oracles.py``.
+This gives SquareCB the exact same regression backbone and refit cadence
+as RegCB's ``gb5``, modulo the confidence-interval machinery (leaf-Gram
+pseudo-inverse) which is unused by IGW.
 """
 
 import numpy as np
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 
 
 class OnlineGBOracle:
-    def __init__(self, ld_dim, max_depth=5, learning_rate=0.05,
-                 buffer_size=2000, fit_every=10, max_trees=200,
-                 min_samples_leaf=5, warmup=50,
-                 normalize_features=True, y_scale=1.0, seed=None):
+    def __init__(self, ld_dim, max_depth=5, n_estimators=100,
+                 burn_in=200, T=None, buffer_size=None,
+                 normalize_features=False, y_scale=1.0, seed=None):
         if y_scale <= 0:
             raise ValueError(f"y_scale must be > 0, got {y_scale}")
 
         self.ld_dim = int(ld_dim)
         self.max_depth = int(max_depth)
-        self.learning_rate = float(learning_rate)
-        self.buffer_size = int(buffer_size)
-        self.fit_every = int(fit_every)
-        self.max_trees = int(max_trees)
-        self.min_samples_leaf = int(min_samples_leaf)
-        self.warmup = int(warmup)
+        self.n_estimators = int(n_estimators)
+        self.burn_in = int(burn_in)
+        self.T = int(T) if T is not None else None
+        self.buffer_size = int(buffer_size) if buffer_size is not None else None
         self.normalize_features = bool(normalize_features)
         self.y_scale = float(y_scale)
+        self._seed = None if seed is None else int(seed)
 
-        self.rng = np.random.default_rng(seed)
-        self.trees: list = []
+        # Schedule of refit rounds. If T is unknown at construction time we
+        # extend lazily on demand: the schedule is `burn_in + 2^k` for k >=
+        # 0, so we can append more points whenever step_count overtakes the
+        # last one.
+        self._next_k = 0
+        self.training_points: list = []
+        self._extend_schedule()
+
         self.buffer_phi = np.empty((0, self.ld_dim), dtype=np.float64)
         self.buffer_y = np.empty(0, dtype=np.float64)
+        self.model: GradientBoostingRegressor | None = None
         self.step_count = 0
+
+    # ------------------------------------------------------------------ #
+    def _extend_schedule(self):
+        """Append the next doubling point ``burn_in + 2^k`` to the schedule.
+
+        With T known, stop once we exceed T (matching RegCB exactly).
+        Without T, extend lazily — one new point per call."""
+        while True:
+            t = self.burn_in + (1 << self._next_k)
+            if self.T is not None and t > self.T:
+                return
+            self.training_points.append(t)
+            self._next_k += 1
+            if self.T is None:
+                return
 
     @staticmethod
     def _l2_normalize_rows(phi):
@@ -66,54 +83,49 @@ class OnlineGBOracle:
             f = self._l2_normalize_rows(f)
         return f
 
-    def _ensemble_predict(self, phi):
-        # F(phi) in *internal* (y/y_scale) units.
-        if not self.trees:
-            return np.zeros(len(phi), dtype=np.float64)
-        out = np.zeros(len(phi), dtype=np.float64)
-        for tree in self.trees:
-            out += tree.predict(phi)
-        return out * self.learning_rate
-
+    # ------------------------------------------------------------------ #
     def predict(self, features):
         f = self._normalize(features)
-        F = self._ensemble_predict(f)
-        # Match the torch oracle's contract: return predictions in the
-        # original-y scale so IGW sees scores comparable to true rewards.
-        return F * self.y_scale
+        if self.model is None:
+            return np.zeros(len(f), dtype=np.float64)
+        return self.model.predict(f) * self.y_scale
 
     def step(self, phi_played, y_played):
         f = self._normalize(phi_played)
         y = np.asarray(y_played, dtype=np.float64) / self.y_scale
 
-        # FIFO append.
         self.buffer_phi = np.concatenate([self.buffer_phi, f], axis=0)
         self.buffer_y = np.concatenate([self.buffer_y, y])
-        if len(self.buffer_phi) > self.buffer_size:
+        if self.buffer_size is not None and len(self.buffer_phi) > self.buffer_size:
             self.buffer_phi = self.buffer_phi[-self.buffer_size:]
             self.buffer_y = self.buffer_y[-self.buffer_size:]
 
         self.step_count += 1
-        if len(self.buffer_phi) < self.warmup:
-            return 0.0
-        if self.step_count % self.fit_every != 0:
+
+        # Lazy schedule extension when T is unknown.
+        if self.T is None:
+            while self.training_points and self.step_count > self.training_points[-1]:
+                self._extend_schedule()
+
+        if self.step_count not in self._training_set():
             return 0.0
 
-        # Functional-gradient step: fit one tree to the negative gradient
-        # of the squared loss (= residual) over the current buffer.
-        F_buf = self._ensemble_predict(self.buffer_phi)
-        residual = self.buffer_y - F_buf
-
-        seed = int(self.rng.integers(0, 2**31 - 1))
-        tree = DecisionTreeRegressor(
+        self.model = GradientBoostingRegressor(
+            n_estimators=self.n_estimators,
             max_depth=self.max_depth,
-            min_samples_leaf=self.min_samples_leaf,
-            random_state=seed,
+            random_state=self._seed,
         )
-        tree.fit(self.buffer_phi, residual)
-        self.trees.append(tree)
-        if len(self.trees) > self.max_trees:
-            self.trees = self.trees[-self.max_trees:]
+        self.model.fit(self.buffer_phi, self.buffer_y)
 
-        F_new = F_buf + self.learning_rate * tree.predict(self.buffer_phi)
-        return float(np.mean((self.buffer_y - F_new) ** 2))
+        preds = self.model.predict(self.buffer_phi)
+        return float(np.mean((self.buffer_y - preds) ** 2))
+
+    # ------------------------------------------------------------------ #
+    def _training_set(self):
+        # Cache as a set on first use to keep `in` checks O(1). Recomputed
+        # whenever the schedule grows (cheap — <= log2(T) entries).
+        cached = getattr(self, "_training_set_cache", None)
+        if cached is None or len(cached) != len(self.training_points):
+            cached = set(self.training_points)
+            self._training_set_cache = cached
+        return cached

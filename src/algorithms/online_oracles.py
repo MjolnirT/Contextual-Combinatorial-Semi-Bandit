@@ -25,8 +25,13 @@ class OnlineOracle(Protocol):
     def step(self, phi_played: np.ndarray, y_played: np.ndarray) -> float: ...
 
 
-# ``gb`` / ``xgb`` (no number) fall back to max_depth in kwargs (default 5).
-_DEPTH_ALIASES = {"gb2": 2, "gb5": 5, "xgb2": 2, "xgb5": 5}
+# ``gb`` / ``dt`` / ``xgb`` (no number) fall back to max_depth in kwargs
+# (default 5).
+_DEPTH_ALIASES = {
+    "gb2": 2, "gb5": 5,
+    "dt2": 2, "dt5": 5,
+    "xgb2": 2, "xgb5": 5,
+}
 
 
 def _kwargs_for(cls, params, *, drop=()):
@@ -51,6 +56,15 @@ def make_oracle(name: str, ld_dim: int, **params) -> OnlineOracle:
         return OnlineGBOracle(
             ld_dim=int(ld_dim), max_depth=int(depth),
             **_kwargs_for(OnlineGBOracle, params,
+                          drop=("ld_dim", "max_depth")),
+        )
+
+    if name in {"dt", "dt2", "dt5"}:
+        from .online_dt_oracle import OnlineDTOracle
+        depth = _DEPTH_ALIASES.get(name, int(params.get("max_depth", 5)))
+        return OnlineDTOracle(
+            ld_dim=int(ld_dim), max_depth=int(depth),
+            **_kwargs_for(OnlineDTOracle, params,
                           drop=("ld_dim", "max_depth")),
         )
 
