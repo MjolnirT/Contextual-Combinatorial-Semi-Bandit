@@ -1,3 +1,4 @@
+import os
 import Context
 import numpy as np
 import string
@@ -178,17 +179,25 @@ class MQ2007ValContextIterator(object):
 
 class YahooContextIterator(object):
     def __init__(self, K=6, L=2, train=True, loop=False):
-        ## Ignore train flag we don't have test data
-        self.d = 415
-
+        # set1-only build with a clean train/vali/test 3-way split.
+        # Backward-compat: if the new files aren't present, fall back to
+        # the legacy yahoo_big.npz (concatenation of set1 + set2, all splits).
         self.loop = loop
-        npFile = np.load(settings.DATA_DIR+"yahoo/yahoo_big.npz")
+        new_train = settings.DATA_DIR + "yahoo/yahoo_train.npz"
+        new_vali = settings.DATA_DIR + "yahoo/yahoo_vali.npz"
+        legacy = settings.DATA_DIR + "yahoo/yahoo_big.npz"
+        if os.path.exists(new_train):
+            self.fname = new_train if train else new_vali
+        else:
+            self.fname = legacy
+        npFile = np.load(self.fname)
         self.L = L
         self.K = K
         self.relevances = npFile['relevances']
         self.features = npFile['features']
         self.docsPerQuery = npFile['docsPerQuery']
         self.features = np.nan_to_num(self.features)
+        self.d = self.features.shape[2]
 
         toretain = np.where(self.docsPerQuery >= self.K)[0]
         self.relevances = self.relevances[toretain,:self.K]
@@ -201,8 +210,8 @@ class YahooContextIterator(object):
         self.has_ldf = True
 
     def next(self):
-        if self.loop:
-            self.curr_idx = np.random.randint(0, len(self.docsPerQuery))
+        if self.loop and self.curr_idx >= len(self.docsPerQuery):
+            self.curr_idx = 0
         if self.curr_idx >= len(self.docsPerQuery):
             return None
         q_idx = self.order[self.curr_idx]
@@ -318,8 +327,8 @@ class MSLRContextIterator2(object):
         self.has_ldf = True
 
     def next(self):
-        if self.loop:
-            self.curr_idx = np.random.randint(0, self.X)
+        if self.loop and self.curr_idx >= self.X:
+            self.curr_idx = 0
         if self.curr_idx >= len(self.docsPerQuery):
             return None
         q_idx = self.order[self.curr_idx]
@@ -363,8 +372,8 @@ class MSLRSmall(object):
         self.has_ldf = True
 
     def next(self):
-        if self.loop:
-            self.curr_idx = np.random.randint(0, self.X)
+        if self.loop and self.curr_idx >= self.X:
+            self.curr_idx = 0
         if self.curr_idx >= len(self.docsPerQuery):
             return None
         q_idx = self.order[self.curr_idx]
@@ -408,8 +417,8 @@ class MSLR30k(object):
         self.has_ldf = True
 
     def next(self):
-        if self.loop:
-            self.curr_idx = np.random.randint(0, self.X)
+        if self.loop and self.curr_idx >= self.X:
+            self.curr_idx = 0
         if self.curr_idx >= len(self.docsPerQuery):
             return None
         q_idx = self.order[self.curr_idx]

@@ -37,7 +37,8 @@ class OnlineXGBOracle:
                  reg_lambda=1.0, reg_alpha=0.0, min_child_weight=1.0,
                  subsample=1.0, colsample_bytree=1.0,
                  tree_method='hist', warmup=50,
-                 normalize_features=True, y_scale=1.0, seed=None):
+                 normalize_features=True, y_scale=1.0, seed=None,
+                 nthread=1):
         if y_scale <= 0:
             raise ValueError(f"y_scale must be > 0, got {y_scale}")
 
@@ -59,6 +60,7 @@ class OnlineXGBOracle:
             'subsample': float(subsample),
             'colsample_bytree': float(colsample_bytree),
             'tree_method': tree_method,
+            'nthread': int(nthread),
             'verbosity': 0,
         }
 

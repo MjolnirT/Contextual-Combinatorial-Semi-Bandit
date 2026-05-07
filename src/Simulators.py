@@ -584,10 +584,19 @@ class DatasetBandit(SemibanditSim):
         'xor': ContextIterators.XORContextIterator
         }
 
-    def __init__(self, L=5, loop=False, dataset="xor", metric=Metrics.NDCG, structure="none", noise=0.1):
+    def __init__(self, L=5, K=None, loop=False, dataset="xor", metric=Metrics.NDCG, structure="none", noise=0.1, train=True):
         self.L = L
         self.dataset = dataset
-        self.contexts = DatasetBandit.DATASETS[dataset](L=self.L,loop=loop)
+        kwargs = {"L": self.L, "loop": loop}
+        if K is not None:
+            kwargs["K"] = K
+        # Forward `train` only to iterators whose constructor accepts it
+        # (mslr30k, mslr*, yahoo). Skips XOR / MQ-style iterators that don't.
+        import inspect
+        iterator_cls = DatasetBandit.DATASETS[dataset]
+        if "train" in inspect.signature(iterator_cls.__init__).parameters:
+            kwargs["train"] = train
+        self.contexts = iterator_cls(**kwargs)
         self.K = self.contexts.K
         self.d = self.contexts.d
         self.has_ldf = self.contexts.has_ldf
