@@ -4,13 +4,14 @@ from Policy import EnumerationPolicy, ClassificationPolicy, RegressionPolicy
 import Argmax
 
 from .base import Semibandit
+from .lin_cache import GramCache, LinModel
 
 
 class MiniMonster(Semibandit):
     """
     Implementation of MiniMonster with a scikit_learn learning algorithm as the AMO.
     """
-    def __init__(self, B, learning_alg = None, classification=True):
+    def __init__(self, B, learning_alg = None, classification=True, lin_cache=False):
         self.B = B
         self.learning_alg = learning_alg
         if learning_alg == None:
@@ -22,6 +23,13 @@ class MiniMonster(Semibandit):
             self.policy_type = ClassificationPolicy
         else:
             self.policy_type = RegressionPolicy
+        self.lin_cache = lin_cache
+        if lin_cache:
+            assert self.policy_type == RegressionPolicy, \
+                "lin_cache requires the regression policy path"
+            self._gram = GramCache(d=B.d)
+        else:
+            self._gram = None
 
 
     def init(self, T, params={}):
@@ -182,12 +190,25 @@ class MiniMonster(Semibandit):
                 features = np.vstack((features, x[0].get_features()))
             features = features[1:,:]
         elif self.policy_type == RegressionPolicy:
-            features = np.zeros((1, H[0][0].get_ld_dim()))
-            for x in H:
-                features = np.vstack((features, x[0].get_ld_features()))
-            features = features[1:,:]
+            ## Preallocated stack — was O(t^2) via vstack-in-loop.
+            ld_dim = H[0][0].get_ld_dim()
+            row_offsets = [0]
+            for i in range(self.t):
+                row_offsets.append(row_offsets[-1] + H[i][0].get_K())
+            features = np.empty((row_offsets[-1], ld_dim))
+            for i in range(self.t):
+                ctx = H[i][0]
+                lo, hi = row_offsets[i], row_offsets[i + 1]
+                features[lo:hi] = ctx.get_ld_features()[:hi - lo]
+            if self.lin_cache:
+                ## Fold any new history rows into the Gram cache.
+                while self._gram.n_history() < self.t:
+                    i = self._gram.n_history()
+                    lo, hi = row_offsets[i], row_offsets[i + 1]
+                    self._gram.append(features[lo:hi])
         else:
             features = None
+            row_offsets = None
 
         ## Invariant is that leader is non-Null
         (leader_reward, predictions) = self._get_reward(H, self.leader, predictions, features=features)
@@ -232,7 +253,10 @@ class MiniMonster(Semibandit):
             dataset.extend(Vpi_dataset)
 
             ## AMO call
-            pi = Argmax.argmax2(self.B, dataset, policy_type=self.policy_type, learning_alg = self.learning_alg)
+            if self.lin_cache:
+                pi = self._cached_lin_amo(Rpi_dataset, Vpi_dataset, features)
+            else:
+                pi = Argmax.argmax2(self.B, dataset, policy_type=self.policy_type, learning_alg = self.learning_alg)
             self.num_amo_calls += 1
 
             ## This is mostly to make sure we have the predictions cached for this new policy
@@ -256,6 +280,33 @@ class MiniMonster(Semibandit):
                 toadd = (Vpi + Dpi)/(2*(1-mu)*Spi)
                 Q.append((pi, toadd))
         return Q
+
+    def _cached_lin_amo(self, Rpi_dataset, Vpi_dataset, features):
+        """OLS fit on dataset = Rpi + Vpi using the cached Gram matrix.
+
+        Equivalent to `Argmax.argmax2(...)` for the linear regression
+        oracle, but reuses the (X^T X) factorization across the inner
+        coordinate-descent loop and across training points. Caller is
+        responsible for syncing the cache with the history before calling.
+
+        Math: dataset stacks the same X twice with rewards y_R and y_V,
+        so the OLS normal equations reduce to
+            (2 X^T X) β = X^T (y_R + y_V)
+        which is solved as one Cholesky solve against (y_R + y_V) / 2
+        on the cached single-copy X^T X.
+        """
+        cache = self._gram
+        n = cache.n_rows()
+        y = np.empty(n)
+        for i in range(self.t):
+            lo, hi = cache.row_range(i)
+            item_R = Rpi_dataset[i]
+            item_V = Vpi_dataset[i]
+            ## act = arange(K), weight = ones(K) by construction in _solve_op.
+            y[lo:hi] = (item_R[2][item_R[1]] + item_V[2][item_V[1]]) / 2.0
+
+        coef, intercept = cache.solve(features, y)
+        return RegressionPolicy(LinModel(coef, intercept))
 
     def _get_reward(self, dataset, pi, predictions, features=None):
         """
