@@ -30,12 +30,17 @@ class Semibandit(object):
 
         Returns:
         cumulative reward (np.array),
-        cumulative optimal reward (np.array)
-        cumulative regret (np.array)
+        cumulative regret (np.array),
+        validation scores (list),
+        cumulative PV-reward trace (np.array) — per-round slate-sum
+        predicted reward from the algorithm's regression oracle, queried
+        before update; NaN rounds (before the first oracle fit) are
+        treated as 0 in the cumulative.
         """
         self.verbose=verbose
         self.init(T, params=params)
         self.val_scores = []
+        self.pv_reward = []
         logger = params.get('logger') if isinstance(params, dict) else None
         opt_against = params.get('opt_against') if isinstance(params, dict) else None
         log_every = int(params.get('log_every', 1)) if isinstance(params, dict) else 1
@@ -53,6 +58,7 @@ class Semibandit(object):
             if x == None:
                 break
             p = self.get_action(x)
+            self.pv_reward.append(self.predict_slate_value(x, p))
             r = self.B.get_slate_reward(p)
             if opt_against == 'oracle':
                 cr = np.asarray(self.B.curr_r, dtype=np.float64).ravel()
@@ -81,7 +87,8 @@ class Semibandit(object):
                 self.update(x, p, self.B.get_base_rewards(p), self.B.get_slate_reward(p))
             l1 = np.cumsum(self.reward)
         l2 = np.cumsum(self.opt_reward)
-        return (l1[9::10], (l2-l1)[9::10], self.val_scores)
+        pv_cum = np.nancumsum(np.asarray(self.pv_reward, dtype=np.float64))
+        return (l1[9::10], (l2-l1)[9::10], self.val_scores, pv_cum[9::10])
 
     def update(self, x, a, y_vec, r):
         """
@@ -110,3 +117,13 @@ class Semibandit(object):
         act = np.random.choice(x.get_K(), size=x.get_L(), replace=False)
         self.action = act
         return self.action
+
+    def predict_slate_value(self, x, p):
+        """
+        Slate-sum predicted reward Σ_{a ∈ p} f̂_{t-1}(x, a) from the
+        algorithm's current regression oracle, queried BEFORE update.
+
+        Used to build the progressive-validation (PV) reward trace.
+        Default implementation returns NaN (no oracle).
+        """
+        return float('nan')

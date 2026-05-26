@@ -125,6 +125,13 @@ class MiniMonster(Semibandit):
         self.action = act
         return act
 
+    def predict_slate_value(self, x, p):
+        if self.leader is None or not hasattr(self.leader, 'model'):
+            return float('nan')
+        features = np.asarray(x.get_ld_features())
+        preds = self.leader.model.predict(features[np.asarray(p), :])
+        return float(np.sum(preds))
+
     def _update_dists(self, slate_dist, base_dist, slate, weight):
         """
         This is a subroutine for the projection step.
