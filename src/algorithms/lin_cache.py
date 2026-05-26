@@ -11,7 +11,7 @@ The actual feature matrix is held by the caller and passed into `solve`.
 """
 
 import numpy as np
-from scipy.linalg import cho_factor, cho_solve
+from scipy.linalg import cho_factor, cho_solve, LinAlgError
 
 
 class GramCache:
@@ -75,14 +75,22 @@ class GramCache:
         assert y.shape[0] == n, f"y has length {y.shape[0]}, expected {n}"
         assert X.shape == (n, self.d), \
             f"X has shape {X.shape}, expected ({n}, {self.d})"
-        if self._cho is None or self._cho_at_n != n:
-            G = self._XtX.copy()
-            G[np.arange(self.dim), np.arange(self.dim)] += self.JITTER
-            self._cho = cho_factor(G, lower=True)
-            self._cho_at_n = n
         rhs = np.empty(self.dim)
         rhs[:self.d] = X.T @ y
         rhs[self.d] = y.sum()
+        if self._cho is None or self._cho_at_n != n:
+            G = self._XtX.copy()
+            G[np.arange(self.dim), np.arange(self.dim)] += self.JITTER
+            try:
+                self._cho = cho_factor(G, lower=True)
+            except (LinAlgError, np.linalg.LinAlgError):
+                self._cho = None
+                self._cho_at_n = -1
+                # Rank-deficient Gram: fall back to lstsq, matching what
+                # sklearn LinearRegression does on the same data.
+                beta, *_ = np.linalg.lstsq(G, rhs, rcond=None)
+                return beta[:-1].copy(), float(beta[-1])
+            self._cho_at_n = n
         beta = cho_solve(self._cho, rhs)
         return beta[:-1].copy(), float(beta[-1])
 
