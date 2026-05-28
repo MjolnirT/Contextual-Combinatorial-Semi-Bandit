@@ -60,6 +60,7 @@ class MiniMonster(Semibandit):
         self.imp_weights = None
         self.t = 1
         self.leader = None
+        self._pv_oracle = None
         self.history = []
         self.num_amo_calls = 0
         if 'mu' in params.keys():
@@ -79,6 +80,14 @@ class MiniMonster(Semibandit):
             pi = Argmax.argmax2(self.B, self.history, policy_type=self.policy_type, learning_alg = self.learning_alg)
             self.num_amo_calls += 1
             self.leader = pi
+            ## Snapshot the reward-scale regressor (fit on raw observed
+            ## rewards with IPS weights) for PV reporting. _solve_op may
+            ## later overwrite self.leader with a policy fit on the
+            ## surrogate targets r1, r2; that surrogate model is fine for
+            ## ranking actions but its predictions are on an O(1/(t*mu))
+            ## scale, not the reward scale, so it is not usable as a
+            ## value estimate.
+            self._pv_oracle = pi
             self.weights = self._solve_op()
             if self.verbose:
                 print("t: ", self.t, " Support: ", len(self.weights), flush=True)
@@ -126,10 +135,10 @@ class MiniMonster(Semibandit):
         return act
 
     def predict_slate_value(self, x, p):
-        if self.leader is None or not hasattr(self.leader, 'model'):
+        if self._pv_oracle is None or not hasattr(self._pv_oracle, 'model'):
             return float('nan')
         features = np.asarray(x.get_ld_features())
-        preds = self.leader.model.predict(features[np.asarray(p), :])
+        preds = self._pv_oracle.model.predict(features[np.asarray(p), :])
         return float(np.sum(preds))
 
     def _update_dists(self, slate_dist, base_dist, slate, weight):

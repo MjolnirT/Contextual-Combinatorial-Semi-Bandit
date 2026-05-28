@@ -68,9 +68,9 @@ def make_oracle(name: str, ld_dim: int, **params) -> OnlineOracle:
                           drop=("ld_dim", "max_depth")),
         )
 
-    if name in {"xgb", "xgb2", "xgb5"}:
+    if name in {"xgb2", "xgb5"}:
         from .online_xgb_oracle import OnlineXGBOracle
-        depth = _DEPTH_ALIASES.get(name, int(params.get("max_depth", 5)))
+        depth = _DEPTH_ALIASES[name]
         return OnlineXGBOracle(
             ld_dim=int(ld_dim), max_depth=int(depth),
             **_kwargs_for(OnlineXGBOracle, params,
