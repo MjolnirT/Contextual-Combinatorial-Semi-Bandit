@@ -6,6 +6,7 @@ live in this module. The implementations now live under
 """
 from algorithms.base import Semibandit
 from algorithms.eps_greedy import EpsGreedy
+from algorithms.eps_greedy_value import EpsGreedyValue
 from algorithms.lin_ucb import LinUCB
 from algorithms.eels import EELS
 from algorithms.eels2 import EELS2
@@ -16,6 +17,7 @@ from algorithms.square_cb import SquareCB
 __all__ = [
     "Semibandit",
     "EpsGreedy",
+    "EpsGreedyValue",
     "LinUCB",
     "EELS",
     "EELS2",
