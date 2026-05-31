@@ -67,7 +67,7 @@ def _enumerate_features(K: int, L: int) -> np.ndarray:
     return cached
 
 
-def _solve_logbarrier(
+def _solve_logdet(
     A_feat: np.ndarray,
     f: np.ndarray,
     gamma: float,
@@ -124,7 +124,7 @@ def _solve_logbarrier(
     return q
 
 
-def logbarrier_sample_slate(
+def logdet_sample_slate(
     f: np.ndarray,
     gamma: float,
     L: int,
@@ -154,12 +154,12 @@ def logbarrier_sample_slate(
         # Single super-action, no choice to make.
         return subsets[0].copy(), np.ones(1, dtype=np.float64), 0
 
-    q = _solve_logbarrier(
+    q = _solve_logdet(
         A_feat, f, gamma, max_iter=max_iter, tol=tol, ridge=ridge
     )
 
     # Categorical draw; numpy needs an exact-sum-to-1 vector, so we already
-    # renormalized inside _solve_logbarrier.
+    # renormalized inside _solve_logdet.
     n_sampled = int(rng.choice(N, p=q))
     slate = subsets[n_sampled].copy()
     return slate, q, n_sampled
