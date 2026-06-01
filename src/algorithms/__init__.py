@@ -15,6 +15,7 @@ from .semi_exp4 import SemiExp4
 from .square_cb import SquareCB
 from .reg_cb import RegCB
 from .random_policy import RandomPolicy
+from .skyline import SkylinePolicy
 
 __all__ = [
     "Semibandit",
@@ -28,4 +29,5 @@ __all__ = [
     "SquareCB",
     "RegCB",
     "RandomPolicy",
+    "SkylinePolicy",
 ]

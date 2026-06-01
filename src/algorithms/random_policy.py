@@ -10,9 +10,14 @@ class RandomPolicy(Semibandit):
 
     Subclassed from Semibandit for the get_action / play loop, but overrides
     init to skip the self.B.N reference (which DatasetBandit does not set).
+
+    Slate selection uses a per-run seeded RNG (``params['seed']``) so the
+    reward trace is reproducible for a given seed and differs across seeds.
     """
 
     def init(self, T, params=None):
+        params = dict(params or {})
+        self.rng = np.random.default_rng(params.get('seed', None))
         self.reward = []
         self.opt_reward = []
 
@@ -22,5 +27,5 @@ class RandomPolicy(Semibandit):
     def get_action(self, x):
         K = x.get_K()
         L = x.get_L()
-        self.action = np.random.choice(K, size=L, replace=False)
+        self.action = self.rng.choice(K, size=L, replace=False)
         return self.action
