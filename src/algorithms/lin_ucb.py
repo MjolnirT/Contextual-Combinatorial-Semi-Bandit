@@ -73,8 +73,3 @@ class LinUCB(Semibandit):
         ucbs = [a[0,0] for a in ucbs]
         ranks = np.argsort(ucbs)
         return ranks[K-self.B.L:K]
-
-    def predict_slate_value(self, x, p):
-        features = np.matrix(x.get_ld_features())
-        preds = features[np.asarray(p), :] * self.weights
-        return float(np.sum(preds))

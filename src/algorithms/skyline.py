@@ -88,10 +88,3 @@ class SkylinePolicy(Semibandit):
         f = self.model.predict(np.nan_to_num(features))
         self.action = self._greedy_slate(np.asarray(f, dtype=np.float64), L)
         return self.action
-
-    def predict_slate_value(self, x, p):
-        if self.model is None:
-            return float('nan')
-        features = np.asarray(x.get_ld_features(), dtype=np.float64)
-        preds = self.model.predict(np.nan_to_num(features[np.asarray(p), :]))
-        return float(np.sum(preds))

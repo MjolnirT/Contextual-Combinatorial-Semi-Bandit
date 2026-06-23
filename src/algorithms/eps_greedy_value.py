@@ -95,10 +95,3 @@ class EpsGreedyValue(Semibandit):
 
         self.action = None
         self.t += 1
-
-    def predict_slate_value(self, x, p):
-        if self.model is None:
-            return float('nan')
-        features = np.asarray(x.get_ld_features(), dtype=np.float64)
-        preds = self.model.predict(features[np.asarray(p), :])
-        return float(np.sum(preds))
