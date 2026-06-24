@@ -96,8 +96,8 @@ class SquareCB(Semibandit):
         elif self.sampler == 'logdet':
             slate, q, _ = logdet_sample_slate(f, gamma, L, self.rng)
             # Store per-arm marginals for shape consistency with the IGW
-            # marginal sampler (downstream PV / logging treats imp_weights
-            # as a length-K vector).
+            # marginal sampler (downstream logging treats imp_weights as a
+            # length-K vector).
             self.imp_weights = q @ _logdet_features(int(f.shape[0]), L)
         else:
             p_bar = igw_marginals(f, gamma, L, solver=self.solver)
