@@ -12,7 +12,8 @@ from .eels import EELS
 from .eels2 import EELS2
 from .mini_monster import MiniMonster
 from .semi_exp4 import SemiExp4
-from .square_cb import SquareCB
+from .square_cb_comb import SquareCB
+from .square_cb_lin import SquareCBLin
 from .reg_cb import RegCB
 from .random_policy import RandomPolicy
 from .skyline import SkylinePolicy
@@ -27,6 +28,7 @@ __all__ = [
     "MiniMonster",
     "SemiExp4",
     "SquareCB",
+    "SquareCBLin",
     "RegCB",
     "RandomPolicy",
     "SkylinePolicy",

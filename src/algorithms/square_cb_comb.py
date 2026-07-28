@@ -7,10 +7,6 @@ from typing import Optional
 from .base import Semibandit
 from .igw_sampler import (depround_slate, igw_bandit_sample_slate,
                           igw_marginals, sample_slate)
-from .logdet_sampler import (
-    _enumerate_features as _logdet_features,
-    logdet_sample_slate,
-)
 from .online_oracles import OnlineOracle, make_oracle
 
 
@@ -53,7 +49,9 @@ class SquareCB(Semibandit):
         self.gamma_schedule = params.get('gamma_schedule', 'sqrt_kt')
         self.solver = params.get('solver', None)
         self.sampler = params.get('sampler', 'marginal')
-        if self.sampler not in ('marginal', 'bandit', 'depround', 'logdet'):
+        if self.sampler not in ('marginal', 'bandit', 'depround'):
+            # 'logdet' moved to its own class: square_cb_lin.SquareCBLin
+            # (bandit feedback, per FGMZ 2021).
             raise ValueError(f"Unknown sampler: {self.sampler!r}")
 
         seed = params.get('seed', None)
@@ -93,12 +91,6 @@ class SquareCB(Semibandit):
         if self.sampler == 'bandit':
             slate = igw_bandit_sample_slate(f, gamma, L, self.rng)
             self.imp_weights = None
-        elif self.sampler == 'logdet':
-            slate, q, _ = logdet_sample_slate(f, gamma, L, self.rng)
-            # Store per-arm marginals for shape consistency with the IGW
-            # marginal sampler (downstream logging treats imp_weights as a
-            # length-K vector).
-            self.imp_weights = q @ _logdet_features(int(f.shape[0]), L)
         else:
             p_bar = igw_marginals(f, gamma, L, solver=self.solver)
             if self.sampler == 'depround':
