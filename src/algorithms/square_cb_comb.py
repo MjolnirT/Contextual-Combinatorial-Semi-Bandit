@@ -1,36 +1,22 @@
 import numpy as np
 
 from Policy import RegressionPolicy
-
 from typing import Optional
-
 from .base import Semibandit
-from .igw_sampler import (depround_slate, igw_bandit_sample_slate,
-                          igw_marginals, sample_slate)
+from .igw_sampler import (sample_slate_depround, igw_bandit_sample_slate, igw_marginals, sample_slate_madow)
 from .online_oracles import OnlineOracle, make_oracle
 
 
 class SquareCB(Semibandit):
     """
-    SquareCB / IGW for the L-of-K semi-bandit setting with online
-    per-arm regression updates.
+    SquareCB / IGW for the L-of-K semi-bandit setting with online per-arm regression updates.
 
     Each round:
-      1. Predict per-item rewards f_hat(phi_k) for all K arms via the
-         online regressor.
-      2. IGW turns scores into marginal inclusion probabilities p_bar in
-         [0,1]^K with ||p_bar||_1 = L by maximizing
-         ``<p, f_hat> + (1/gamma) * sum_k log(p_k)`` (the log-barrier
-         exploration program; see ``igw_sampler.igw_marginals``). A
-         custom solver can be plugged in via ``params['solver']``.
-         Madow systematic sampling draws a size-L super action.
-      3. After observing per-arm rewards y on the played arms A, take ONE
-         plain MSE gradient step on the L-row mini-batch (phi[A], y) — the
-         canonical SquareCB regression oracle, matching ``learnOnline`` in
-         ``example_code_oe2d``.
+      1. Predict per-item rewards f_hat(phi_k) for all K arms via the online regressor.
+      2. IGW turns scores into marginal inclusion probabilities p_bar in [0,1]^K with ||p_bar||_1 = L by maximizing ``<p, f_hat> + (1/gamma) * sum_k log(p_k)`` (the log-barrier exploration program; see ``igw_sampler.igw_marginals``). A custom solver can be plugged in via ``params['solver']``. Madow systematic sampling draws a size-L super action.
+      3. After observing per-arm rewards y on the played arms A, take ONE plain MSE gradient step on the L-row mini-batch (phi[A], y) — the canonical SquareCB regression oracle, matching ``learnOnline`` in ``example_code_oe2d``.
 
-    Restricted to RegressionPolicy: per-arm features must be available via
-    ``x.get_ld_features()``.
+    Restricted to RegressionPolicy: per-arm features must be available via ``x.get_ld_features()``.
     """
 
     def __init__(self, B, learning_alg=None, classification=False):
@@ -50,15 +36,12 @@ class SquareCB(Semibandit):
         self.solver = params.get('solver', None)
         self.sampler = params.get('sampler', 'marginal')
         if self.sampler not in ('marginal', 'bandit', 'depround'):
-            # 'logdet' moved to its own class: square_cb_lin.SquareCBLin
-            # (bandit feedback, per FGMZ 2021).
             raise ValueError(f"Unknown sampler: {self.sampler!r}")
 
         seed = params.get('seed', None)
         self.rng = np.random.default_rng(seed)
 
-        # Forward everything to the oracle factory; make_oracle filters
-        # per-oracle, so SquareCB-only / legacy keys are dropped silently.
+        # Initialize the online oracle
         self._oracle_name = params.get('model_type', 'linear')
         params.setdefault('seed', seed)
         self._oracle_params = params
@@ -94,9 +77,9 @@ class SquareCB(Semibandit):
         else:
             p_bar = igw_marginals(f, gamma, L, solver=self.solver)
             if self.sampler == 'depround':
-                slate = depround_slate(p_bar, L, self.rng)
+                slate = sample_slate_depround(p_bar, L, self.rng)
             else:  # 'marginal' (Madow systematic)
-                slate = sample_slate(p_bar, L, self.rng)
+                slate = sample_slate_madow(p_bar, L, self.rng)
             self.imp_weights = p_bar
         self.action = slate
         return slate

@@ -1,10 +1,7 @@
 """
-Simplified SquareCB.Lin log-det sampler for L-of-K semi-bandits.
+SquareCB.Lin log-det sampler for L-of-K semi-bandits.
 
-Follows Foster, Gentile, Mohri, Zimmert (2021) "Adapting to Misspecification
-in Contextual Bandits" (arXiv:2107.05745), Algorithm 2 + Definition 1,
-specialized to one-hot per-arm features e_i (so d = K) and adapted to the
-combinatorial slate setting by enumerating super-actions of size L.
+Follows Foster, Gentile, Mohri, Zimmert (2021) "Adapting to Misspecification in Contextual Bandits" (arXiv:2107.05745), Algorithm 2 + Definition 1, specialized to one-hot per-arm features e_i (so d = K) and adapted to the combinatorial slate setting by enumerating super-actions of size L.
 
 Original logdet-barrier objective (Eq. 6 in the paper):
 
@@ -14,8 +11,7 @@ Our simplification: drop the ā_p ā_p^T centering, keep only H_p:
 
     argmin_{p ∈ Δ(A)} { <ā_p, θ> - γ^{-1} log det(H_p) }
 
-In our codebase we operate on per-arm REWARDS f (not losses), so we flip the
-linear sign:
+In our codebase we operate on per-arm REWARDS f (not losses), so we flip the linear sign:
 
     p_t = argmin_{p ∈ Δ_N} { -<ā_p, f> - γ^{-1} log det(H_p) }
 
@@ -26,20 +22,15 @@ with
     H_p = sum_n p_n a_n a_n^T in R^{K x K} (diagonal = marginals,
           off-diagonal = pairwise co-occurrence probabilities).
 
-The objective is convex (linear + composition of -log det with an affine map),
-solved by Frank-Wolfe over the (K choose L)-simplex; per-iteration work is
-dominated by inverting the K x K matrix H_p (so the cost is in K, not N).
+The objective is convex (linear + composition of -log det with an affine map), solved by Frank-Wolfe over the (K choose L)-simplex; per-iteration work is dominated by inverting the K x K matrix H_p (so the cost is in K, not N).
 """
 
+import numpy as np
 from itertools import combinations
 from typing import Optional, Tuple
 
-import numpy as np
-
-
 _SUBSET_CACHE: dict = {}
 _FEATURE_CACHE: dict = {}
-
 
 def _enumerate_subsets(K: int, L: int) -> np.ndarray:
     """All size-L subsets of [K] as a length-N x L int64 array, cached."""
@@ -77,11 +68,9 @@ def _solve_logdet(
 ) -> np.ndarray:
     """Frank-Wolfe on Δ_N for J(q) = -<ā_q, f> - γ^{-1} log det(H_q + ridge·I).
 
-    Reward convention: J corresponds to maximizing predicted reward plus a
-    log-det exploration bonus, recast as a convex minimization.
+    Reward convention: J corresponds to maximizing predicted reward plus a log-det exploration bonus, recast as a convex minimization.
 
-    Per-iteration cost: O(N·K^2 + K^3); for K=10, N=120 each iteration is
-    ~10^4 flops, so 80 iterations land at ~10^6 flops/round.
+    Per-iteration cost: O(N·K^2 + K^3); for K=10, N=120 each iteration is~10^4 flops, so 80 iterations land at ~10^6 flops/round.
     """
     N, K = A_feat.shape
 

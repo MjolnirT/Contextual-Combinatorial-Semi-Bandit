@@ -1,37 +1,21 @@
 """
 IGW sampler for L-of-K semi-bandits.
 
-Given estimated per-item rewards f_hat (shape K), an exploration parameter
-gamma, and a slate size L, ``igw_marginals`` returns a marginal inclusion
-distribution p_bar in [0,1]^K with ||p_bar||_1 = L. ``sample_slate`` then
-draws a size-L super action whose item-inclusion marginals match p_bar
-exactly (Madow systematic sampling).
+Given estimated per-item rewards f_hat (shape K), an exploration parameter gamma, and a slate size L, ``igw_marginals`` returns a marginal inclusion distribution p_bar in [0,1]^K with ||p_bar||_1 = L. ``sample_slate_madow`` then draws a size-L super action whose item-inclusion marginals match p_bar exactly (Madow systematic sampling).
 
 ``igw_marginals`` solves a log-barrier exploration program:
 
     max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
     s.t.    sum_k p_k = L,    0 < p_k <= 1
 
-Larger gamma -> smaller log-barrier weight -> sharper p (more exploit),
-matching the standard SquareCB direction where gamma_t grows with t.
-KKT (ignoring the upper cap) yields p_k = (1/gamma) / (lambda - f_hat_k)
-with lambda > max_k f_hat_k chosen so sum_k p_k = L; items whose p_k
-would exceed 1 are pinned to 1 and the remainder re-solved.
-
-Empirical motivation: head-to-head against the legacy sum-of-squares
-coverage IGW (closed-form 1/(n + gamma*gap - z) saturation solve), the
-log-barrier program produced strictly better cumulative reward across
-{linear, gb2, xgb2} oracles and gamma_multiplier in {0.1, 1, 10} on the
-xor benchmark; the SS solver was removed.
-
 A user can short-circuit the closed-form solve by supplying a custom
 ``solver(f_hat, gamma, L) -> p_bar``.
 """
 
+import numpy as np
+
 from math import comb
 from typing import Callable, Optional
-
-import numpy as np
 from scipy.optimize import brentq
 
 
@@ -42,23 +26,16 @@ def igw_marginals(
     solver: Optional[Callable[[np.ndarray, float, int], np.ndarray]] = None,
 ) -> np.ndarray:
     """
-    Marginal inclusion probabilities p_bar in [0,1]^K with sum = L from
-    the log-barrier exploration program
+    Marginal inclusion probabilities p_bar in [0,1]^K with sum = L from the log-barrier exploration program
 
         max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
         s.t.    sum_k p_k = L,    0 < p_k <= 1.
 
-    With coef = 1/gamma and gap_k = f_max - f_hat_k (>= 0), the KKT
-    optimum is p_k = coef / (u + gap_k) where u = lambda - f_max > 0
-    solves the 1-D equation
+    With coef = 1/gamma and gap_k = f_max - f_hat_k (>= 0), the KKT optimum is p_k = coef / (u + gap_k) where u = lambda - f_max > 0 solves the 1-D equation
 
         sum_k 1/(u + gap_k) = L_rem / coef.
 
-    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf
-    (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -L_rem/coef < 0,
-    so brentq finds the unique root. Items whose p_k would exceed 1 are
-    pinned to 1 and the remainder re-solved (saturation loop terminates
-    because each pass pins at least one new item).
+    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -L_rem/coef < 0, so brentq finds the unique root. Items whose p_k would exceed 1 are pinned to 1 and the remainder re-solved (saturation loop terminates because each pass pins at least one new item).
     """
     if solver is not None:
         p = np.asarray(solver(f_hat, gamma, L), dtype=np.float64)
@@ -132,12 +109,9 @@ def igw_marginals(
     return p
 
 
-def sample_slate(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndarray:
+def sample_slate_madow(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndarray:
     """
-    Madow systematic sampling: returns a length-L array of distinct base
-    actions whose inclusion marginals equal ``p_bar``. Items are randomly
-    permuted before the systematic sweep so the joint distribution does
-    not depend on the input ordering.
+    Madow systematic sampling: returns a length-L array of distinct base actions whose inclusion marginals equal ``p_bar``. Items are randomly permuted before the systematic sweep so the joint distribution does not depend on the input ordering.
     """
     p = np.asarray(p_bar, dtype=np.float64)
     K = p.shape[0]
@@ -151,8 +125,7 @@ def sample_slate(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndar
     cum[0] = 0.0
     np.cumsum(p_perm, out=cum[1:])
 
-    # Floating point: pull the upper edge in slightly so searchsorted lands
-    # in the last bucket for thresholds near L.
+    # Floating point: pull the upper edge in slightly so searchsorted lands in the last bucket for thresholds near L.
     total = cum[-1]
     if not np.isfinite(total) or abs(total - L) > 1e-6 * max(L, 1):
         raise ValueError("p_bar must sum to L (got %.6f vs %d)" % (total, L))
@@ -171,26 +144,17 @@ def sample_slate(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndar
     return selected.astype(np.int64)
 
 
-def depround_slate(p_bar: np.ndarray, L: int,
+def sample_slate_depround(p_bar: np.ndarray, L: int,
                    rng: Optional[np.random.Generator] = None) -> np.ndarray:
     """
     Dependent rounding (Gandhi-Khuller-Parthasarathy-Srinivasan 2002).
 
-    Converts a marginal distribution ``p_bar in [0,1]^K`` with
-    ``sum(p_bar) == L`` into a 0/1 slate of size exactly L such that each
-    item k is included with probability exactly ``p_bar[k]``.
+    Converts a marginal distribution ``p_bar in [0,1]^K`` with ``sum(p_bar) == L`` into a 0/1 slate of size exactly L such that each item k is included with probability exactly ``p_bar[k]``.
 
-    Pair-update rule: while two coordinates p_i, p_j are both in (0, 1),
-    let alpha = min(1 - p_i, p_j) and beta = min(p_i, 1 - p_j); with
-    probability beta/(alpha+beta) take the "alpha move" (p_i += alpha,
-    p_j -= alpha), else the "beta move" (p_i -= beta, p_j += beta).
-    Each iteration drives at least one of {p_i, p_j} to {0, 1}, so the
-    loop terminates in <= K iterations. Item-level marginals and the
-    total sum are preserved exactly in expectation; under floating-point
-    arithmetic the sum is preserved to within ~1e-12, and any residual
+    Pair-update rule: while two coordinates p_i, p_j are both in (0, 1), let alpha = min(1 - p_i, p_j) and beta = min(p_i, 1 - p_j); with probability beta/(alpha+beta) take the "alpha move" (p_i += alpha, p_j -= alpha), else the "beta move" (p_i -= beta, p_j += beta). Each iteration drives at least one of {p_i, p_j} to {0, 1}, so the loop terminates in <= K iterations. Item-level marginals and the total sum are preserved exactly in expectation; under floating-point arithmetic the sum is preserved to within ~1e-12, and any residual
     drift is snapped at the end via top-L selection.
 
-    Compared to Madow systematic sampling (``sample_slate``):
+    Compared to Madow systematic sampling (``sample_slate_madow``):
       * Same marginal guarantee (P[k in S] = p_bar[k]).
       * Different joint law -- DepRound has weaker negative correlation
         between distinct items, but is still negatively associated.
@@ -248,28 +212,21 @@ def igw_bandit_sample_slate(
     gamma: float,
     L: int,
     rng: Optional[np.random.Generator] = None,
-    max_retries: int = 10000,
 ) -> np.ndarray:
     """
-    Sample a size-L slate by treating each L-subset of [K] as a single
-    macro-action and applying scalar SquareCB IGW over them. Sampling
-    proceeds via standard rejection.
+    Sample a size-L slate by treating each L-subset of [K] as a single macro-action and applying scalar SquareCB IGW over them. Sampling proceeds via standard rejection.
 
-    Macro-action scoring is additive: f(S) = sum_{k in S} scores[k].
-    With M = C(K, L) and gap(S) = f_max - f(S) (>= 0), IGW assigns
+    Macro-action scoring is additive: f(S) = sum_{k in S} scores[k]. With M = C(K, L) and gap(S) = f_max - f(S) (>= 0), IGW assigns
 
         p(S) = 1 / (M + gamma * gap(S))     for S != S*
         p(S*) = 1 - sum_{S != S*} p(S)
 
-    Rejection sampler:
+    One-proposal sampler:
         propose S ~ Uniform(C(K, L))
         accept with probability  M / (M + gamma * gap(S))   in [0, 1]
-        otherwise resample
+        otherwise return S*
 
-    The argmax slate S* has gap=0 and is always accepted, bounding the
-    expected loop length by O(M); for typical gamma the accept rate
-    stays close to 1 and the loop terminates in a few iterations. A
-    safety ``max_retries`` falls back to S* to guarantee termination.
+    This produces the stated IGW probabilities directly: a non-optimal slate is selected with probability 1/M and retained with probability M / (M + gamma * gap(S)); all remaining probability mass is assigned to S*. Resampling after a rejection would instead normalize the inverse-gap weights, which is a different distribution.
 
     Parameters
     ----------
@@ -280,8 +237,6 @@ def igw_bandit_sample_slate(
     L : int
         Slate size, 1 <= L <= K.
     rng : np.random.Generator, optional
-    max_retries : int
-        Hard cap on rejection iterations before falling back to S*.
 
     Returns
     -------
@@ -299,15 +254,15 @@ def igw_bandit_sample_slate(
     f_max = float(f[top_L].sum())
     M = float(comb(K, L))
     g = float(gamma)
+    if not np.isfinite(g) or g < 0.0:
+        raise ValueError("gamma must be a finite non-negative number")
 
-    for _ in range(max_retries):
-        a = rng.choice(K, size=L, replace=False)
-        gap = f_max - float(f[a].sum())
-        # gap can be a tiny negative due to fp; clamp to >= 0.
-        if gap < 0.0:
-            gap = 0.0
-        accept_prob = M / (M + g * gap)
-        if rng.random() < accept_prob:
-            return np.sort(a).astype(np.int64)
-    # Fallback: argmax slate (always accepted under IGW).
+    a = rng.choice(K, size=L, replace=False)
+    gap = f_max - float(f[a].sum())
+    # gap can be a tiny negative due to fp; clamp to >= 0.
+    if gap < 0.0:
+        gap = 0.0
+    accept_prob = M / (M + g * gap)
+    if rng.random() < accept_prob:
+        return np.sort(a).astype(np.int64)
     return np.sort(top_L).astype(np.int64)

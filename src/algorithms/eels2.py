@@ -1,9 +1,8 @@
 import numpy as np
 import sklearn.linear_model
-
-from Policy import EnumerationPolicy, RegressionPolicy
 import Argmax
 
+from Policy import EnumerationPolicy, RegressionPolicy
 from .base import Semibandit
 
 

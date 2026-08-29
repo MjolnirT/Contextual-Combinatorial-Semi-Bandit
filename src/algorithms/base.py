@@ -3,9 +3,7 @@ import numpy as np
 
 class Semibandit(object):
     """
-    Default semibandit learning algorithm.  Provides interface for
-    semibandit learning but also implements the random policy that
-    picks random slates on each iteration and does no updating.
+    Default semibandit learning algorithm.  Provides interface for semibandit learning but also implements the random policy that picks random slates on each iteration and does no updating.
     """
     def __init__(self, B):
         """
@@ -85,8 +83,7 @@ class Semibandit(object):
 
     def update(self, x, a, y_vec, r):
         """
-        Update the state of the semibandit algorithm with the most recent
-        context, composite action, and reward.
+        Update the state of the semibandit algorithm with the most recent context, composite action, and reward.
 
         The default semibandit doesn't do any updating.
 

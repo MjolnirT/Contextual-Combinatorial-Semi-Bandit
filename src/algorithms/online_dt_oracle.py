@@ -3,35 +3,23 @@ Online stagewise decision-tree residual oracle for SquareCB / IGW.
 
 Approach
 --------
-Functional gradient descent in the squared-loss landscape over a sliding
-replay buffer:
+Functional gradient descent in the squared-loss landscape over a sliding replay buffer:
 
   - Keep a FIFO buffer of the last W (phi, y) pairs seen on played arms.
   - Every ``fit_every`` rounds (after a small warmup), compute residuals
         r = y - F(phi)
-    over the buffer, where F is the current ensemble prediction, and fit
-    one new ``sklearn.tree.DecisionTreeRegressor(max_depth)`` to (phi, r).
-    Append it to the ensemble with shrinkage ``learning_rate``.
-  - Cap the ensemble at ``max_trees`` (drop oldest first) to bound predict
-    cost as T grows.
+    over the buffer, where F is the current ensemble prediction, and fit one new ``sklearn.tree.DecisionTreeRegressor(max_depth)`` to (phi, r). Append it to the ensemble with shrinkage ``learning_rate``.
+  - Cap the ensemble at ``max_trees`` (drop oldest first) to bound predict cost as T grows.
 
-Each new tree is one functional-gradient step on the buffered loss — the
-direct analogue of "one SGD step per round" for the linear oracle, lifted
-to function space. A buffer is required because a depth-5 tree fit on the
-L played samples (often L=3) overfits trivially; the buffer gives the
-weak learner enough rows to find a meaningful split structure.
+Each new tree is one functional-gradient step on the buffered loss — the direct analogue of "one SGD step per round" for the linear oracle, lifted to function space. A buffer is required because a depth-5 tree fit on the L played samples (often L=3) overfits trivially; the buffer gives the weak learner enough rows to find a meaningful split structure.
 
-Note: this is *not* the same as ``OnlineGBOracle`` (sklearn's
-``GradientBoostingRegressor`` refit from scratch on RegCB's doubling
-schedule). This class hand-rolls a stagewise decision-tree residual
-ensemble and updates online.
+Note: this is *not* the same as ``OnlineGBOracle`` (sklearn's ``GradientBoostingRegressor`` refit from scratch on RegCB's doubling schedule). This class hand-rolls a stagewise decision-tree residual ensemble and updates online.
 
-This class is not a scikit-learn estimator and does not implement
-``fit``/``partial_fit``; it follows the small ``OnlineOracle`` protocol
-in ``online_oracles.py``.
+This class is not a scikit-learn estimator and does not implement ``fit``/``partial_fit``; it follows the small ``OnlineOracle`` protocol in ``online_oracles.py``.
 """
 
 import numpy as np
+
 from sklearn.tree import DecisionTreeRegressor
 
 

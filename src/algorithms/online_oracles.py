@@ -6,9 +6,7 @@ An oracle implements two methods:
     predict(features: np.ndarray[K, d]) -> np.ndarray[K]      # original-y units
     step(phi_played: np.ndarray[L, d], y_played: np.ndarray[L]) -> float
 
-``make_oracle(name, ld_dim, **params)`` selects the implementation. The
-factory introspects each oracle's __init__ signature, so SquareCB can
-forward its full params dict and unrelated keys are dropped silently.
+``make_oracle(name, ld_dim, **params)`` selects the implementation. The factory introspects each oracle's __init__ signature, so SquareCB can forward its full params dict and unrelated keys are dropped silently.
 """
 
 import inspect

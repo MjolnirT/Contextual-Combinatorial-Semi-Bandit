@@ -1,8 +1,5 @@
 """
-Backwards-compatible re-export of the algorithm classes that used to
-live in this module. The implementations now live under
-``src/algorithms/`` and the experiment runner is in
-``run_semibandits.py`` at the repo root.
+Backwards-compatible re-export of the algorithm classes that used to live in this module. The implementations now live under ``src/algorithms/`` and the experiment runner is in ``run_semibandits.py`` at the repo root.
 """
 from algorithms.base import Semibandit
 from algorithms.eps_greedy import EpsGreedy

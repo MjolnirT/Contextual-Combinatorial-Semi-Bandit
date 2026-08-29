@@ -1,9 +1,7 @@
 import numpy as np
 
 from Policy import RegressionPolicy
-
 from typing import Optional
-
 from .base import Semibandit
 from .online_oracles import OnlineOracle, make_oracle
 

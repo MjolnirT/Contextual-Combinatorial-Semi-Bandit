@@ -1,16 +1,14 @@
 """
 Online per-arm reward regressor for SquareCB / IGW semi-bandits.
 
-Maps per-arm features phi_k in R^{ld_dim} to a reward score in [0,1] via a
-sigmoid head. Trained online with one BCE gradient step per round on the
-mini-batch of L played arms.
+Maps per-arm features phi_k in R^{ld_dim} to a reward score in [0,1] via a sigmoid head. Trained online with one BCE gradient step per round on the mini-batch of L played arms.
 """
-
-from math import pi, sqrt
 
 import numpy as np
 import torch
 import torch.nn as nn
+
+from math import pi, sqrt
 
 
 def _make_lr_lambda(tzero):

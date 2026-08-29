@@ -1,8 +1,7 @@
 import numpy as np
-
-from Policy import EnumerationPolicy, ClassificationPolicy, RegressionPolicy
 import Argmax
 
+from Policy import EnumerationPolicy, ClassificationPolicy, RegressionPolicy
 from .base import Semibandit
 
 

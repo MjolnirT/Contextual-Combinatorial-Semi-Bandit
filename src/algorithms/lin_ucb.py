@@ -1,17 +1,11 @@
 import numpy as np
 import scipy.linalg
-
 from .base import Semibandit
 
 
 class LinUCB(Semibandit):
     """
-    Implementation of Semibandit Linucb.
-    This algorithm of course only works if features are available
-    in the SemibanditSim object.
-
-    It must also have a fixed dimension featurization and expose
-    B.d as an instance variable.
+    Implementation of Semibandit Linucb. This algorithm only works if features are available in the SemibanditSim object. It must also have a fixed dimension featurization and expose B.d as an instance variable.
     """
     def __init__(self, B):
         """
@@ -60,9 +54,7 @@ class LinUCB(Semibandit):
 
     def get_action(self, x):
         """
-        Find the UCBs for the predicted reward for each base action
-        and play the composite action that maximizes the UCBs
-        subject to whatever constraints.
+        Find the UCBs for the predicted reward for each base action and play the composite action that maximizes the UCBs subject to whatever constraints.
         """
         features = np.matrix(x.get_ld_features())
         K = x.get_K()

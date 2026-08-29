@@ -1,27 +1,17 @@
 import numpy as np
+
 from Policy import *
 
 """
-Factored out implementation of argmax oracle.  Takes in a bandit
-object, a dataset, and a policy class type, and optionally a learning
-algorithm and produces the policy with the "best" empirical reward on
-the dataset.
+Factored out implementation of argmax oracle.  Takes in a bandit object, a dataset, and a policy class type, and optionally a learning algorithm and produces the policy with the "best" empirical reward on the dataset.
 
-policy_type can be EnumerationPolicy, ClassificationPolicy, or
-RegressionPolicy.
+policy_type can be EnumerationPolicy, ClassificationPolicy, or RegressionPolicy.
 
-EnumerationPolicy is the fully synthetic setting, where the policy
-class can be explicitly enumerated.
+EnumerationPolicy is the fully synthetic setting, where the policy class can be explicitly enumerated.
 
-Classification policy implements a reduction from cost-sensitive
-classification to importance weighted multiclass classification where
-each reward sensitive example is converted into K multiclass examples,
-one for each label, and the importance weights are related to the
-rewards. This is a consistent reduction, but it does increase the
-dataset size by a factor of K.
+Classification policy implements a reduction from cost-sensitive classification to importance weighted multiclass classification where each reward sensitive example is converted into K multiclass examples, one for each label, and the importance weights are related to the rewards. This is a consistent reduction, but it does increase the dataset size by a factor of K.
 
-RegreesionPolicy regresses onto the importance weighted rewards, where
-the weights are inside the squared loss rather than outside.
+RegressionPolicy regresses onto the importance weighted rewards, where the weights are inside the squared loss rather than outside.
 """
 def argmax(B, dataset, policy_type=EnumerationPolicy, learning_alg=None):
     """
