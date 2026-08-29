@@ -1,5 +1,8 @@
 venv/*
 data/*
+!data/prepare_mslr_pool.py
+!data/prepare_yahoo_pool.py
+!data/download_yahoo.py
 src/__pycache__/*
 example_code_*
 *.pyc
