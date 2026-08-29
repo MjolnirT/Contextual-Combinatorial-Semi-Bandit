@@ -5,10 +5,10 @@ Foster, Gentile, Mohri, Zimmert (2021) "Adapting to Misspecification in Contextu
 ``square_cb_comb.SquareCB``:
 
   1. Action selection: the log-det-barrier program over all
-     C(K, L) super-actions (``logdet_sampler.logdet_sample_slate``) instead of per-arm IGW marginals + Madow.
+     C(K, L) super-actions (``sampling_oracle.logdet_sampler.logdet_sample_slate``) instead of per-arm IGW marginals + Madow.
   2. Feedback: BANDIT, not semi-bandit. ``update`` gives the oracle ONE regression sample per round — the sum of the played arms' features (the super-action vector a = sum_{k in A} phi_k) paired with the scalar slate reward — and treats the per-arm rewards as unobserved. This is the feedback model the log-det exploration is built for: the barrier keeps the played covariance H_q well-conditioned, which is what makes per-arm means identifiable from aggregate rewards.
 
-The oracle interface is shared with SquareCB (``online_oracles.make_oracle``). The linear oracle is the faithful choice — FGMZ's algorithm is linear by construction; nonlinear oracles are accepted but make the row a labeled hybrid rather than the paper's algorithm.
+The oracle interface is shared with SquareCB (``learning_oracles.online_oracles.make_oracle``). The linear oracle is the faithful choice — FGMZ's algorithm is linear by construction; nonlinear oracles are accepted but make the row a labeled hybrid rather than the paper's algorithm.
 """
 
 import numpy as np
@@ -16,11 +16,11 @@ import numpy as np
 from Policy import RegressionPolicy
 from typing import Optional
 from .base import Semibandit
-from .logdet_sampler import (
+from .sampling_oracle.logdet_sampler import (
     _enumerate_features as _logdet_features,
     logdet_sample_slate,
 )
-from .online_oracles import OnlineOracle, make_oracle
+from .learning_oracles.online_oracles import OnlineOracle, make_oracle
 
 
 class SquareCBLin(Semibandit):

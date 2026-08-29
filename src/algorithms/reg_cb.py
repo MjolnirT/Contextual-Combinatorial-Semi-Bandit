@@ -22,7 +22,7 @@ import sys
 import os
 
 from .base import Semibandit
-from . import incremental as Incremental
+from .learning_oracles import incremental as Incremental
 from Policy import RegressionPolicy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

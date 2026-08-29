@@ -6,11 +6,15 @@ data/*
 src/__pycache__/*
 example_code_*
 *.pyc
-results/*
+result*
 references/*
 logs/*
 wandb/*
+greedy_probe_out/*
+optarm_probe_out/*
+optarm_win_out/*
 tune/
 runs/
 tests/
 slurm/
+*.md

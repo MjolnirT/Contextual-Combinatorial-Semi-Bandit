@@ -3,8 +3,9 @@ import numpy as np
 from Policy import RegressionPolicy
 from typing import Optional
 from .base import Semibandit
-from .igw_sampler import (sample_slate_depround, igw_bandit_sample_slate, igw_marginals, sample_slate_madow)
-from .online_oracles import OnlineOracle, make_oracle
+from .sampling_oracle.igw_sampler import (sample_slate_depround, igw_bandit_sample_slate,
+                                          igw_marginals, sample_slate_madow)
+from .learning_oracles.online_oracles import OnlineOracle, make_oracle
 
 
 class SquareCB(Semibandit):

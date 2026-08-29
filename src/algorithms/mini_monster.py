@@ -3,7 +3,7 @@ import Argmax
 
 from Policy import EnumerationPolicy, ClassificationPolicy, RegressionPolicy
 from .base import Semibandit
-from .lin_cache import GramCache, LinModel
+from .learning_oracles.lin_cache import GramCache, LinModel
 
 
 class MiniMonster(Semibandit):
