@@ -1,9 +1,6 @@
 """
 RegCB — direct port of ``RegressorUCB`` from
-``example_code_regcb/Semibandits.py`` (Dylan Foster's 2017 prototype on the
-``regression`` branch of akshaykr/oracle_cb), which became RegCB in
-Foster, Agarwal, Dudík, Luo, Schapire, ICML 2018,
-"Practical Contextual Bandits with Regression Oracles".
+``example_code_regcb/Semibandits.py`` (Dylan Foster's 2017 prototype on the ``regression`` branch of akshaykr/oracle_cb), which became RegCB in Foster, Agarwal, Dudík, Luo, Schapire, ICML 2018, "Practical Contextual Bandits with Regression Oracles".
 
 Restricted to the contextual bandit setting (L=1).
 
@@ -17,21 +14,18 @@ Oracles (incremental regressors with a ``pred_range`` confidence band):
   * ``gb5``  → ``Incremental.IncrementalRegressionTreeEnsemble2(
                      max_depth=5, n_estimators=100)``
 
-The runner (``runs/run_semibandits.py``) passes ``--param`` as ``radius``
-(the empirical-least-squares-regret slack β in the paper) and
-``--regcb_mode`` as the pull strategy. All other RegressorUCB defaults
-(``burn_in=200``, ``cheat=True``, ``stack_actions=False``, ``prec=0.001``)
-are kept verbatim.
+The runner (``run_semibandits.py``) passes ``--param`` as ``radius`` (the empirical-least-squares-regret slack β in the paper) and ``--regcb_mode`` as the pull strategy. All other RegressorUCB defaults (``burn_in=200``, ``cheat=True``, ``stack_actions=False``, ``prec=0.001``) are kept verbatim.
 """
 
 import numpy as np
+import sys
+import os
 
 from .base import Semibandit
 from . import incremental as Incremental
-import sys
-import os
+from Policy import RegressionPolicy
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from Policy import RegressionPolicy  # noqa: E402
 
 
 class RegCB(Semibandit):

@@ -1,19 +1,15 @@
 import numpy as np
+import sklearn.linear_model
+import sklearn.ensemble
+import xgboost as xgb
 
 from Policy import RegressionPolicy
-
 from .base import Semibandit
 
 
 def _make_batch_regressor(oracle_name):
-    """Factory for the batch (full-data) supervised regressor used by the
-    skyline. Mirrors the oracle families in runs/run_semibandits.py's
-    make_learning_alg, but fit once offline on the whole training set
-    rather than online.
+    """Factory for the batch (full-data) supervised regressor used by the skyline. Mirrors the oracle families in run_semibandits.py's make_learning_alg, but fit once offline on the whole training set rather than online.
     """
-    import sklearn.linear_model
-    import sklearn.ensemble
-
     if oracle_name == 'lin':
         return sklearn.linear_model.LinearRegression()
     if oracle_name in ('gb2', 'gb5'):
@@ -21,7 +17,6 @@ def _make_batch_regressor(oracle_name):
         return sklearn.ensemble.GradientBoostingRegressor(
             n_estimators=100, max_depth=depth)
     if oracle_name in ('xgb2', 'xgb5'):
-        import xgboost as xgb
         depth = 2 if oracle_name == 'xgb2' else 5
         return xgb.XGBRegressor(n_estimators=100, max_depth=depth)
     raise ValueError(f"Skyline does not support oracle {oracle_name!r}; "
@@ -32,15 +27,9 @@ class SkylinePolicy(Semibandit):
     """
     Supervised-learning skyline (in-sample upper bound).
 
-    Before the run, a regression oracle is fit *once* on the entire training
-    set: every (arm feature row, true relevance) pair across all queries.
-    During the run the fully-trained oracle predicts per-arm reward and the
-    policy greedily plays the top-L arms. No exploration, no online update —
-    the oracle has already seen all the data, so this is a ceiling on what a
-    supervised per-arm ranker can achieve on the training stream.
+    Before the run, a regression oracle is fit *once* on the entire training set: every (arm feature row, true relevance) pair across all queries. During the run the fully-trained oracle predicts per-arm reward and the policy greedily plays the top-L arms. No exploration, no online update — the oracle has already seen all the data, so this is a ceiling on what a supervised per-arm ranker can achieve on the training stream.
 
-    Restricted to ``RegressionPolicy`` (per-arm features via
-    ``x.get_ld_features()``). Deterministic given the fit.
+    Restricted to ``RegressionPolicy`` (per-arm features via ``x.get_ld_features()``). Deterministic given the fit.
     """
 
     def __init__(self, B, learning_alg=None, classification=False):
@@ -53,9 +42,7 @@ class SkylinePolicy(Semibandit):
         self.model = None
 
     def _fit_full_data(self):
-        """Batch-fit the oracle on all (arm, relevance) pairs in the train
-        set. ``B.contexts.features`` is [X, K, d] and ``relevances`` is
-        [X, K]; flatten both to a single (X*K, d) regression problem."""
+        """Batch-fit the oracle on all (arm, relevance) pairs in the train set. ``B.contexts.features`` is [X, K, d] and ``relevances`` is [X, K]; flatten both to a single (X*K, d) regression problem."""
         feats = np.asarray(self.B.contexts.features, dtype=np.float64)
         rels = np.asarray(self.B.contexts.relevances, dtype=np.float64)
         X, K, d = feats.shape
