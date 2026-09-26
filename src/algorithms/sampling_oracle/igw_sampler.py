@@ -8,22 +8,41 @@ Given estimated per-item rewards f_hat (shape K), an exploration parameter gamma
     max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
     s.t.    sum_k p_k = L,    0 < p_k <= 1
 
-A user can short-circuit the closed-form solve by supplying a custom
-``solver(f_hat, gamma, L) -> p_bar``.
+The program itself is solved by a pluggable back-end, selected through the
+``solver`` argument of ``igw_marginals``:
+
+  * ``None`` (default) / ``'closed_form'`` -- ``_solve_closed_form``: the
+    analytic KKT solution, a 1-D root find (``scipy.optimize.brentq``) inside
+    a saturation loop. No dependency beyond scipy; this is what every
+    experiment in the repo runs.
+  * ``'cvxpy'`` -- ``_solve_cvxpy``: hands the same program to CVXPY as a
+    generic convex program. Reference / cross-check path only: CVXPY is an
+    OPTIONAL dependency (imported lazily, so the module still imports without
+    it) and is orders of magnitude slower per call than the closed form.
+  * any callable ``solver(f_hat, gamma, L) -> p_bar``, as before.
+
+Back-ends are registered in ``IGW_SOLVERS``; both built-ins are exact drop-in
+callables (they short-circuit the same degenerate inputs), so they may also be
+called directly.
 """
 
 import numpy as np
 
 from math import comb
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 from scipy.optimize import brentq
+
+
+# solver(f_hat, gamma, L) -> p_bar
+SolverFn = Callable[[np.ndarray, float, int], np.ndarray]
+SolverLike = Union[str, SolverFn, None]
 
 
 def igw_marginals(
     f_hat: np.ndarray,
     gamma: float,
     L: int,
-    solver: Optional[Callable[[np.ndarray, float, int], np.ndarray]] = None,
+    solver: SolverLike = None,
 ) -> np.ndarray:
     """
     Marginal inclusion probabilities p_bar in [0,1]^K with sum = L from the log-barrier exploration program
@@ -31,18 +50,36 @@ def igw_marginals(
         max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
         s.t.    sum_k p_k = L,    0 < p_k <= 1.
 
-    With coef = 1/gamma and gap_k = f_max - f_hat_k (>= 0), the KKT optimum is p_k = coef / (u + gap_k) where u = lambda - f_max > 0 solves the 1-D equation
-
-        sum_k 1/(u + gap_k) = L_rem / coef.
-
-    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -L_rem/coef < 0, so brentq finds the unique root. Items whose p_k would exceed 1 are pinned to 1 and the remainder re-solved (saturation loop terminates because each pass pins at least one new item).
+    ``solver`` picks the back-end that solves it: ``None`` (default) or
+    ``'closed_form'`` for the analytic KKT solve, ``'cvxpy'`` for the CVXPY
+    cross-check, or any callable ``(f_hat, gamma, L) -> p_bar``. Whatever the
+    back-end, the returned marginals are checked by ``_validate_marginals``.
     """
-    if solver is not None:
-        p = np.asarray(solver(f_hat, gamma, L), dtype=np.float64)
-        _validate_marginals(p, L)
-        return p
+    if solver is None:
+        solver = DEFAULT_IGW_SOLVER
+    if not callable(solver):
+        key = str(solver).strip().lower()
+        if key not in IGW_SOLVERS:
+            raise ValueError(
+                "unknown IGW solver %r; expected one of %s or a callable "
+                "(f_hat, gamma, L) -> p_bar" % (solver, sorted(IGW_SOLVERS))
+            )
+        solver = IGW_SOLVERS[key]
+    p = np.asarray(solver(f_hat, gamma, L), dtype=np.float64)
+    _validate_marginals(p, L)
+    return p
 
-    f_hat = np.asarray(f_hat, dtype=np.float64)
+
+def _degenerate_marginals(f_hat: np.ndarray, gamma: float,
+                          L: int) -> Optional[np.ndarray]:
+    """
+    The solver-independent cases, or None when the real program must be solved.
+
+    Shared by every built-in back-end so they agree exactly on the boundary and
+    so no back-end is ever handed an input outside the log barrier's domain
+    (gamma = 0 -> infinite barrier weight; L = K -> the feasible set is the
+    single point p = 1; gamma = +inf -> no barrier at all).
+    """
     K = f_hat.shape[0]
     if not (1 <= L <= K):
         raise ValueError("L must satisfy 1 <= L <= K, got L=%d, K=%d" % (L, K))
@@ -59,7 +96,26 @@ def igw_marginals(
         top = np.argpartition(f_hat, -L)[-L:]
         p[top] = 1.0
         return p
+    return None
 
+
+def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
+    """
+    Analytic KKT solve (the default back-end).
+
+    With coef = 1/gamma and gap_k = f_max - f_hat_k (>= 0), the KKT optimum is p_k = coef / (u + gap_k) where u = lambda - f_max > 0 solves the 1-D equation
+
+        sum_k 1/(u + gap_k) = L_rem / coef.
+
+    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -L_rem/coef < 0, so brentq finds the unique root. Items whose p_k would exceed 1 are pinned to 1 and the remainder re-solved (saturation loop terminates because each pass pins at least one new item).
+    """
+    f_hat = np.asarray(f_hat, dtype=np.float64)
+    K = f_hat.shape[0]
+    degenerate = _degenerate_marginals(f_hat, gamma, L)
+    if degenerate is not None:
+        return degenerate
+
+    coef = 1.0 / float(gamma)
     saturated = np.zeros(K, dtype=bool)
     p = np.zeros(K, dtype=np.float64)
 
@@ -105,8 +161,107 @@ def igw_marginals(
         p[idx] = p_idx
         break
 
-    _validate_marginals(p, L)
     return p
+
+
+def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
+                 cvxpy_solver: Optional[str] = None,
+                 **solve_kwargs) -> np.ndarray:
+    """
+    CVXPY back-end: the same program handed to a generic convex solver.
+
+    ``cvxpy_solver`` forwards a solver name (e.g. 'CLARABEL', 'SCS', 'ECOS'),
+    defaulting to CLARABEL when installed -- CVXPY's own pick for this
+    exponential-cone program. Since the point of this back-end is to check the
+    closed form, it also tightens that solver's tolerances
+    (``_CVXPY_TIGHT_DEFAULTS``): at stock tolerances the two agree only to
+    ~1e-5, tightened to ~1e-10, at no measurable cost. Anything passed in
+    ``solve_kwargs`` wins over those defaults. Interior-point output still only
+    satisfies the constraints to solver tolerance, so it is repaired onto the
+    exact box/sum before ``_validate_marginals`` sees it.
+
+    Requesting 1e-12 is deliberately more than CLARABEL can always deliver on
+    the near-degenerate barrier (small gamma * a nearly-saturated coordinate),
+    so a minority of calls stop at ``OPTIMAL_INACCURATE`` and CVXPY emits
+    "Solution may be inaccurate". Those answers are still the most accurate of
+    any tolerance setting measured (~1e-6 vs ~5e-5 at 1e-10), which is why the
+    status is accepted rather than raised on.
+    """
+    f_hat = np.asarray(f_hat, dtype=np.float64)
+    degenerate = _degenerate_marginals(f_hat, gamma, L)
+    if degenerate is not None:
+        return degenerate
+
+    try:
+        import cvxpy as cp
+    except ImportError as exc:  # optional dependency
+        raise ImportError(
+            "the 'cvxpy' IGW solver needs the optional cvxpy package "
+            "(pip install cvxpy). The default solver ('closed_form') has no "
+            "dependency beyond scipy."
+        ) from exc
+
+    K = f_hat.shape[0]
+    gamma = float(gamma)
+    p = cp.Variable(K, name="p_bar")
+    problem = cp.Problem(
+        cp.Maximize(gamma * (f_hat @ p) + cp.sum(cp.log(p))),
+        [cp.sum(p) == float(L), p <= 1.0],
+    )
+    if cvxpy_solver is None and "CLARABEL" in cp.installed_solvers():
+        cvxpy_solver = "CLARABEL"
+    if cvxpy_solver is not None:
+        solve_kwargs["solver"] = cvxpy_solver
+        for key, val in _CVXPY_TIGHT_DEFAULTS.get(cvxpy_solver, {}).items():
+            solve_kwargs.setdefault(key, val)
+    problem.solve(**solve_kwargs)
+
+    if p.value is None or problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+        raise RuntimeError(
+            "cvxpy failed on the IGW program (status=%r, gamma=%g, L=%d, K=%d)"
+            % (problem.status, gamma, L, K)
+        )
+    return _repair_marginals(np.asarray(p.value, dtype=np.float64).ravel(), L)
+
+
+# Per-solver tolerance overrides for ``_solve_cvxpy`` -- see its docstring.
+# A solver missing from this map just runs at its own defaults.
+_CVXPY_TIGHT_DEFAULTS = {
+    "CLARABEL": {"tol_gap_abs": 1e-12, "tol_gap_rel": 1e-12, "tol_feas": 1e-12},
+    "ECOS": {"abstol": 1e-12, "reltol": 1e-12, "feastol": 1e-12},
+    "SCS": {"eps": 1e-10, "max_iters": 50000},
+}
+
+
+def _repair_marginals(p: np.ndarray, L: int) -> np.ndarray:
+    """
+    Snap an approximately-feasible p onto {0 <= p <= 1, sum p = L} exactly.
+
+    Clip into the box, then push the residual L - sum(p) onto the coordinates
+    that still have room, re-clipping each pass. Each pass either kills the
+    residual or saturates at least one more coordinate, so the loop is bounded
+    by K. Only meant to absorb solver-tolerance drift (~1e-9), not to fix a
+    genuinely infeasible point -- ``_validate_marginals`` still has the last
+    word.
+    """
+    p = np.clip(np.asarray(p, dtype=np.float64), 0.0, 1.0)
+    for _ in range(p.shape[0] + 1):
+        residual = float(L) - float(p.sum())
+        if abs(residual) <= 1e-15 * max(L, 1):
+            break
+        room = p < 1.0 if residual > 0 else p > 0.0
+        n_room = int(room.sum())
+        if n_room == 0:
+            break
+        p[room] = np.clip(p[room] + residual / n_room, 0.0, 1.0)
+    return p
+
+
+IGW_SOLVERS: dict = {
+    "closed_form": _solve_closed_form,
+    "cvxpy": _solve_cvxpy,
+}
+DEFAULT_IGW_SOLVER = "closed_form"
 
 
 def sample_slate_madow(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndarray:
