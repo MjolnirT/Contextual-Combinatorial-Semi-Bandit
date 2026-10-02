@@ -3,7 +3,7 @@ import numpy as np
 from Policy import RegressionPolicy
 from typing import Optional
 from .base import Semibandit
-from .sampling_oracle.igw_sampler import (sample_slate_depround, igw_bandit_sample_slate,
+from .sampling_oracle.igw_sampler import (sample_slate_depround,
                                           igw_marginals, sample_slate_madow)
 from .learning_oracles.online_oracles import OnlineOracle, make_oracle
 
@@ -36,7 +36,7 @@ class SquareCB(Semibandit):
         self.gamma_schedule = params.get('gamma_schedule', 'sqrt_kt')
         self.solver = params.get('solver', None)
         self.sampler = params.get('sampler', 'marginal')
-        if self.sampler not in ('marginal', 'bandit', 'depround'):
+        if self.sampler not in ('marginal', 'depround'):
             raise ValueError(f"Unknown sampler: {self.sampler!r}")
 
         seed = params.get('seed', None)
@@ -72,16 +72,12 @@ class SquareCB(Semibandit):
         features = np.asarray(x.get_ld_features(), dtype=np.float64)
         f = self._build_model(features.shape[1]).predict(features)
         gamma = self._gamma()
-        if self.sampler == 'bandit':
-            slate = igw_bandit_sample_slate(f, gamma, L, self.rng)
-            self.imp_weights = None
-        else:
-            p_bar = igw_marginals(f, gamma, L, solver=self.solver)
-            if self.sampler == 'depround':
-                slate = sample_slate_depround(p_bar, L, self.rng)
-            else:  # 'marginal' (Madow systematic)
-                slate = sample_slate_madow(p_bar, L, self.rng)
-            self.imp_weights = p_bar
+        p_bar = igw_marginals(f, gamma, L, solver=self.solver)
+        if self.sampler == 'depround':
+            slate = sample_slate_depround(p_bar, L, self.rng)
+        else:  # 'marginal' (Madow systematic)
+            slate = sample_slate_madow(p_bar, L, self.rng)
+        self.imp_weights = p_bar
         self.action = slate
         return slate
 

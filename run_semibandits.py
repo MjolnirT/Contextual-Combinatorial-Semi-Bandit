@@ -60,12 +60,11 @@ def parse_args():
                              "best fixed policy Pi*); 'oracle' uses the "
                              "top-L hindsight oracle sum(top-L of curr_r).")
     parser.add_argument('--sampler', action='store', default='marginal',
-                        choices=['marginal', 'bandit', 'depround', 'logdet'],
+                        choices=['marginal', 'depround', 'logdet'],
                         help="SquareCB sampler: 'marginal' (per-arm IGW "
                              "marginals + Madow systematic, default), "
                              "'depround' (per-arm IGW marginals + dependent "
-                             "rounding), 'bandit' (IGW over C(K,L) "
-                             "macro-actions via rejection sampling), or "
+                             "rounding), or "
                              "'logdet' (simplified SquareCB.Lin: "
                              "convex log-det-barrier program over the "
                              "C(K,L) super-action simplex, Frank-Wolfe "
@@ -389,7 +388,7 @@ def main():
         # Append a CamelCased sampler suffix when not the default so that
         # different samplers don't overwrite each other's saved files
         # (and stay compatible with the notebook's [a-zA-Z][a-zA-Z0-9]*
-        # learner regex). marginal: "lin"; bandit: "linBandit".
+        # learner regex). marginal: "lin"; depround: "linDepround".
         # Refit tag sits between the oracle and the sampler suffix, so a
         # token parses as <oracle><Refit|Norefit><SamplerSuffix> and both
         # tags can be stripped independently.

@@ -28,7 +28,6 @@ called directly.
 
 import numpy as np
 
-from math import comb
 from typing import Callable, Optional, Union
 from scipy.optimize import brentq
 
@@ -360,64 +359,3 @@ def _validate_marginals(p: np.ndarray, L: int) -> None:
     s = float(p.sum())
     if abs(s - L) > 1e-6 * max(L, 1):
         raise RuntimeError("p_bar does not sum to L: sum=%.6f, L=%d" % (s, L))
-
-
-def igw_bandit_sample_slate(
-    scores: np.ndarray,
-    gamma: float,
-    L: int,
-    rng: Optional[np.random.Generator] = None,
-) -> np.ndarray:
-    """
-    Sample a size-L slate by treating each L-subset of [K] as a single macro-action and applying scalar SquareCB IGW over them. Sampling proceeds via standard rejection.
-
-    Macro-action scoring is additive: f(S) = sum_{k in S} scores[k]. With M = C(K, L) and gap(S) = f_max - f(S) (>= 0), IGW assigns
-
-        p(S) = 1 / (M + gamma * gap(S))     for S != S*
-        p(S*) = 1 - sum_{S != S*} p(S)
-
-    One-proposal sampler:
-        propose S ~ Uniform(C(K, L))
-        accept with probability  M / (M + gamma * gap(S))   in [0, 1]
-        otherwise return S*
-
-    This produces the stated IGW probabilities directly: a non-optimal slate is selected with probability 1/M and retained with probability M / (M + gamma * gap(S)); all remaining probability mass is assigned to S*. Resampling after a rejection would instead normalize the inverse-gap weights, which is a different distribution.
-
-    Parameters
-    ----------
-    scores : array_like, shape (K,)
-        Per-arm reward predictions f_hat(k).
-    gamma : float
-        IGW exploration parameter.
-    L : int
-        Slate size, 1 <= L <= K.
-    rng : np.random.Generator, optional
-
-    Returns
-    -------
-    slate : np.ndarray of shape (L,), dtype int64
-        Sorted indices of the sampled macro-action.
-    """
-    if rng is None:
-        rng = np.random.default_rng()
-    f = np.asarray(scores, dtype=np.float64)
-    K = int(f.shape[0])
-    if not (1 <= L <= K):
-        raise ValueError(f"L={L} out of range [1, {K}]")
-
-    top_L = np.argpartition(f, -L)[-L:]
-    f_max = float(f[top_L].sum())
-    M = float(comb(K, L))
-    g = float(gamma)
-    if not np.isfinite(g) or g < 0.0:
-        raise ValueError("gamma must be a finite non-negative number")
-
-    a = rng.choice(K, size=L, replace=False)
-    gap = f_max - float(f[a].sum())
-    # gap can be a tiny negative due to fp; clamp to >= 0.
-    if gap < 0.0:
-        gap = 0.0
-    accept_prob = M / (M + g * gap)
-    if rng.random() < accept_prob:
-        return np.sort(a).astype(np.int64)
-    return np.sort(top_L).astype(np.int64)
