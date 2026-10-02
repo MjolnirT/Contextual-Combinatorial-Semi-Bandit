@@ -93,8 +93,7 @@ class OnlinePerArmRegressor:
 
     @staticmethod
     def _l2_normalize_rows(phi):
-        # Per-row L2 normalization with a tiny floor so SGD operates on
-        # unit-scale inputs regardless of dataset feature magnitudes.
+        # Per-row L2 normalization with a tiny floor so SGD operates on unit-scale inputs regardless of dataset feature magnitudes.
         norms = np.linalg.norm(phi, axis=-1, keepdims=True)
         return phi / np.clip(norms, 1e-12, None)
 
@@ -105,9 +104,7 @@ class OnlinePerArmRegressor:
             f = self._l2_normalize_rows(f)
         phi = torch.as_tensor(f, dtype=torch.float32, device=self.device)
         scores = self.model(phi)
-        # Predictions are returned in the original target scale: the
-        # network learns y/y_scale internally; multiply back here so
-        # downstream IGW sees scores comparable to true rewards.
+        # Predictions are returned in the original target scale: the network learns y/y_scale internally; multiply back here so downstream IGW sees scores comparable to true rewards.
         return scores.detach().cpu().numpy().astype(np.float64) * self.y_scale
 
     def step(self, phi_played, y_played):
@@ -115,9 +112,7 @@ class OnlinePerArmRegressor:
         if self.normalize_features:
             f = self._l2_normalize_rows(f)
         phi = torch.as_tensor(f, dtype=torch.float32, device=self.device)
-        # Target normalization: train on y/y_scale so the internal MSE
-        # loss landscape stays in the [0,1]-ish regime regardless of the
-        # raw reward magnitude.
+        # Target normalization: train on y/y_scale so the internal MSE loss landscape stays in the [0,1]-ish regime regardless of the raw reward magnitude.
         y = torch.as_tensor(np.asarray(y_played) / self.y_scale,
                             dtype=torch.float32, device=self.device)
 

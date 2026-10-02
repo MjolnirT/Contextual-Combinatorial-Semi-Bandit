@@ -23,8 +23,7 @@ class OnlineOracle(Protocol):
     def step(self, phi_played: np.ndarray, y_played: np.ndarray) -> float: ...
 
 
-# ``gb`` / ``dt`` / ``xgb`` (no number) fall back to max_depth in kwargs
-# (default 5).
+# ``gb`` / ``dt`` / ``xgb`` (no number) fall back to max_depth in kwargs (default 5).
 _DEPTH_ALIASES = {
     "gb2": 2, "gb5": 5,
     "dt2": 2, "dt5": 5,
@@ -33,8 +32,7 @@ _DEPTH_ALIASES = {
 
 
 def _kwargs_for(cls, params, *, drop=()):
-    """Keep params accepted by ``cls.__init__``, minus any in ``drop``
-    (used to avoid clashes with kwargs the caller passes explicitly)."""
+    """Keep params accepted by ``cls.__init__``, minus any in ``drop`` (used to avoid clashes with kwargs the caller passes explicitly)."""
     accepted = set(inspect.signature(cls).parameters) - {"self", *drop}
     return {k: v for k, v in params.items() if k in accepted}
 

@@ -1,13 +1,11 @@
 """Cached Gram-matrix OLS for MiniMonster's inner-loop AMO.
 
-Inside `MiniMonster._solve_op`, the AMO is called up to ~20 times per
-training point on a dataset with two structural properties:
+Inside `MiniMonster._solve_op`, the AMO is called up to ~20 times per training point on a dataset with two structural properties:
 
   1. The same X matrix is used in every call (history features), and
   2. X grows append-only across training points.
 
-`GramCache` keeps `X^T X` (with intercept column) updated incrementally.
-The actual feature matrix is held by the caller and passed into `solve`.
+`GramCache` keeps `X^T X` (with intercept column) updated incrementally. The actual feature matrix is held by the caller and passed into `solve`.
 """
 
 import numpy as np
@@ -17,8 +15,7 @@ from scipy.linalg import cho_factor, cho_solve, LinAlgError
 class GramCache:
     """Append-only X^T X cache with intercept column, indexed by history index.
 
-    Storage is just (d+1) x (d+1); the feature rows themselves live with the
-    caller.
+    Storage is just (d+1) x (d+1); the feature rows themselves live with the caller.
     """
 
     JITTER = 1e-8
@@ -41,8 +38,7 @@ class GramCache:
     def append(self, features):
         """Fold the K rows for the next history index into X^T X.
 
-        Returns the row range (lo, hi) so callers can index into their own
-        feature buffer at the same offsets.
+        Returns the row range (lo, hi) so callers can index into their own feature buffer at the same offsets.
         """
         feats = np.asarray(features)
         K = feats.shape[0]
@@ -67,9 +63,7 @@ class GramCache:
     def solve(self, X, y):
         """Solve `(X^T X) β = X^T y`. Returns (coef, intercept).
 
-        `X` is the (n_rows, d) feature matrix held by the caller (without
-        intercept column); `y` has length n_rows. The Cholesky factor is
-        reused as long as no rows have been appended since the last call.
+        `X` is the (n_rows, d) feature matrix held by the caller (without intercept column); `y` has length n_rows. The Cholesky factor is reused as long as no rows have been appended since the last call.
         """
         n = self._n_rows
         assert y.shape[0] == n, f"y has length {y.shape[0]}, expected {n}"
@@ -86,8 +80,7 @@ class GramCache:
             except (LinAlgError, np.linalg.LinAlgError):
                 self._cho = None
                 self._cho_at_n = -1
-                # Rank-deficient Gram: fall back to lstsq, matching what
-                # sklearn LinearRegression does on the same data.
+                # Rank-deficient Gram: fall back to lstsq, matching what sklearn LinearRegression does on the same data.
                 beta, *_ = np.linalg.lstsq(G, rhs, rcond=None)
                 return beta[:-1].copy(), float(beta[-1])
             self._cho_at_n = n

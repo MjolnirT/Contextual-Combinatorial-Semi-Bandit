@@ -44,16 +44,11 @@ class OnlineGBOracle:
         self._seed = None if seed is None else int(seed)
         self.refit = refit if refit is None else bool(refit)
 
-        # Rows collected since the previous training point ("latest
-        # episode"). Tracked separately from the main buffer so that a
-        # bounded buffer_size cannot corrupt the episode slice.
+        # Rows collected since the previous training point ("latest episode"). Tracked separately from the main buffer so that a bounded buffer_size cannot corrupt the episode slice.
         self._epi_phi = np.empty((0, self.ld_dim), dtype=np.float64)
         self._epi_y = np.empty(0, dtype=np.float64)
 
-        # Schedule of refit rounds. If T is unknown at construction time we
-        # extend lazily on demand: the schedule is `burn_in + 2^k` for k >=
-        # 0, so we can append more points whenever step_count overtakes the
-        # last one.
+        # Schedule of refit rounds. If T is unknown at construction time we extend lazily on demand: the schedule is `burn_in + 2^k` for k >= 0, so we can append more points whenever step_count overtakes the last one.
         self._next_k = 0
         self.training_points: list = []
         self._extend_schedule()
@@ -129,8 +124,7 @@ class OnlineGBOracle:
                 random_state=self._seed,
             )
         elif self.refit is False:
-            # Extend the existing ensemble by n_estimators more trees,
-            # trained on the buffer (full history unless buffer_size set).
+            # Extend the existing ensemble by n_estimators more trees, trained on the buffer (full history unless buffer_size set).
             fit_phi, fit_y = self.buffer_phi, self.buffer_y
             if self.model is None:
                 self.model = GradientBoostingRegressor(
@@ -159,8 +153,7 @@ class OnlineGBOracle:
 
     # ------------------------------------------------------------------ #
     def _training_set(self):
-        # Cache as a set on first use to keep `in` checks O(1). Recomputed
-        # whenever the schedule grows (cheap — <= log2(T) entries).
+        # Cache as a set on first use to keep `in` checks O(1). Recomputed whenever the schedule grows (cheap — <= log2(T) entries).
         cached = getattr(self, "_training_set_cache", None)
         if cached is None or len(cached) != len(self.training_points):
             cached = set(self.training_points)

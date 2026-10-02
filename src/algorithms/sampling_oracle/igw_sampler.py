@@ -8,22 +8,13 @@ Given estimated per-item rewards f_hat (shape K), an exploration parameter gamma
     max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
     s.t.    sum_k p_k = L,    0 < p_k <= 1
 
-The program itself is solved by a pluggable back-end, selected through the
-``solver`` argument of ``igw_marginals``:
+The program itself is solved by a pluggable back-end, selected through the ``solver`` argument of ``igw_marginals``:
 
-  * ``None`` (default) / ``'closed_form'`` -- ``_solve_closed_form``: the
-    analytic KKT solution, a 1-D root find (``scipy.optimize.brentq``) inside
-    a saturation loop. No dependency beyond scipy; this is what every
-    experiment in the repo runs.
-  * ``'cvxpy'`` -- ``_solve_cvxpy``: hands the same program to CVXPY as a
-    generic convex program. Reference / cross-check path only: CVXPY is an
-    OPTIONAL dependency (imported lazily, so the module still imports without
-    it) and is orders of magnitude slower per call than the closed form.
+  * ``None`` (default) / ``'closed_form'`` -- ``_solve_closed_form``: the analytic KKT solution, a 1-D root find (``scipy.optimize.brentq``) inside a saturation loop. No dependency beyond scipy; this is what every experiment in the repo runs.
+  * ``'cvxpy'`` -- ``_solve_cvxpy``: hands the same program to CVXPY as a generic convex program. Reference / cross-check path only: CVXPY is an OPTIONAL dependency (imported lazily, so the module still imports without it) and is orders of magnitude slower per call than the closed form.
   * any callable ``solver(f_hat, gamma, L) -> p_bar``, as before.
 
-Back-ends are registered in ``IGW_SOLVERS``; both built-ins are exact drop-in
-callables (they short-circuit the same degenerate inputs), so they may also be
-called directly.
+Back-ends are registered in ``IGW_SOLVERS``; both built-ins are exact drop-in callables (they short-circuit the same degenerate inputs), so they may also be called directly.
 """
 
 import numpy as np
@@ -49,10 +40,7 @@ def igw_marginals(
         max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
         s.t.    sum_k p_k = L,    0 < p_k <= 1.
 
-    ``solver`` picks the back-end that solves it: ``None`` (default) or
-    ``'closed_form'`` for the analytic KKT solve, ``'cvxpy'`` for the CVXPY
-    cross-check, or any callable ``(f_hat, gamma, L) -> p_bar``. Whatever the
-    back-end, the returned marginals are checked by ``_validate_marginals``.
+    ``solver`` picks the back-end that solves it: ``None`` (default) or ``'closed_form'`` for the analytic KKT solve, ``'cvxpy'`` for the CVXPY cross-check, or any callable ``(f_hat, gamma, L) -> p_bar``. Whatever the back-end, the returned marginals are checked by ``_validate_marginals``.
     """
     if solver is None:
         solver = DEFAULT_IGW_SOLVER
@@ -74,10 +62,7 @@ def _degenerate_marginals(f_hat: np.ndarray, gamma: float,
     """
     The solver-independent cases, or None when the real program must be solved.
 
-    Shared by every built-in back-end so they agree exactly on the boundary and
-    so no back-end is ever handed an input outside the log barrier's domain
-    (gamma = 0 -> infinite barrier weight; L = K -> the feasible set is the
-    single point p = 1; gamma = +inf -> no barrier at all).
+    Shared by every built-in back-end so they agree exactly on the boundary and so no back-end is ever handed an input outside the log barrier's domain (gamma = 0 -> infinite barrier weight; L = K -> the feasible set is the single point p = 1; gamma = +inf -> no barrier at all).
     """
     K = f_hat.shape[0]
     if not (1 <= L <= K):
@@ -141,8 +126,7 @@ def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
         def h(u: float) -> float:
             return float(np.sum(1.0 / (u + gap))) - target
 
-        # h(u) <= n_rem/u so any u_hi >= n_rem/target gives h(u_hi) <= 0;
-        # double for fp safety until the sign flip is confirmed.
+        # h(u) <= n_rem/u so any u_hi >= n_rem/target gives h(u_hi) <= 0; double for fp safety until the sign flip is confirmed.
         u_lo = 1e-18
         u_hi = max(1.0, n_rem / target)
         while h(u_hi) > 0.0 and u_hi < 1e30:
@@ -169,22 +153,9 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     """
     CVXPY back-end: the same program handed to a generic convex solver.
 
-    ``cvxpy_solver`` forwards a solver name (e.g. 'CLARABEL', 'SCS', 'ECOS'),
-    defaulting to CLARABEL when installed -- CVXPY's own pick for this
-    exponential-cone program. Since the point of this back-end is to check the
-    closed form, it also tightens that solver's tolerances
-    (``_CVXPY_TIGHT_DEFAULTS``): at stock tolerances the two agree only to
-    ~1e-5, tightened to ~1e-10, at no measurable cost. Anything passed in
-    ``solve_kwargs`` wins over those defaults. Interior-point output still only
-    satisfies the constraints to solver tolerance, so it is repaired onto the
-    exact box/sum before ``_validate_marginals`` sees it.
+    ``cvxpy_solver`` forwards a solver name (e.g. 'CLARABEL', 'SCS', 'ECOS'), defaulting to CLARABEL when installed -- CVXPY's own pick for this exponential-cone program. Since the point of this back-end is to check the closed form, it also tightens that solver's tolerances (``_CVXPY_TIGHT_DEFAULTS``): at stock tolerances the two agree only to ~1e-5, tightened to ~1e-10, at no measurable cost. Anything passed in ``solve_kwargs`` wins over those defaults. Interior-point output still only satisfies the constraints to solver tolerance, so it is repaired onto the exact box/sum before ``_validate_marginals`` sees it.
 
-    Requesting 1e-12 is deliberately more than CLARABEL can always deliver on
-    the near-degenerate barrier (small gamma * a nearly-saturated coordinate),
-    so a minority of calls stop at ``OPTIMAL_INACCURATE`` and CVXPY emits
-    "Solution may be inaccurate". Those answers are still the most accurate of
-    any tolerance setting measured (~1e-6 vs ~5e-5 at 1e-10), which is why the
-    status is accepted rather than raised on.
+    Requesting 1e-12 is deliberately more than CLARABEL can always deliver on the near-degenerate barrier (small gamma * a nearly-saturated coordinate), so a minority of calls stop at ``OPTIMAL_INACCURATE`` and CVXPY emits "Solution may be inaccurate". Those answers are still the most accurate of any tolerance setting measured (~1e-6 vs ~5e-5 at 1e-10), which is why the status is accepted rather than raised on.
     """
     f_hat = np.asarray(f_hat, dtype=np.float64)
     degenerate = _degenerate_marginals(f_hat, gamma, L)
@@ -223,8 +194,7 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     return _repair_marginals(np.asarray(p.value, dtype=np.float64).ravel(), L)
 
 
-# Per-solver tolerance overrides for ``_solve_cvxpy`` -- see its docstring.
-# A solver missing from this map just runs at its own defaults.
+# Per-solver tolerance overrides for ``_solve_cvxpy`` -- see its docstring. A solver missing from this map just runs at its own defaults.
 _CVXPY_TIGHT_DEFAULTS = {
     "CLARABEL": {"tol_gap_abs": 1e-12, "tol_gap_rel": 1e-12, "tol_feas": 1e-12},
     "ECOS": {"abstol": 1e-12, "reltol": 1e-12, "feastol": 1e-12},
@@ -236,12 +206,7 @@ def _repair_marginals(p: np.ndarray, L: int) -> np.ndarray:
     """
     Snap an approximately-feasible p onto {0 <= p <= 1, sum p = L} exactly.
 
-    Clip into the box, then push the residual L - sum(p) onto the coordinates
-    that still have room, re-clipping each pass. Each pass either kills the
-    residual or saturates at least one more coordinate, so the loop is bounded
-    by K. Only meant to absorb solver-tolerance drift (~1e-9), not to fix a
-    genuinely infeasible point -- ``_validate_marginals`` still has the last
-    word.
+    Clip into the box, then push the residual L - sum(p) onto the coordinates that still have room, re-clipping each pass. Each pass either kills the residual or saturates at least one more coordinate, so the loop is bounded by K. Only meant to absorb solver-tolerance drift (~1e-9), not to fix a genuinely infeasible point -- ``_validate_marginals`` still has the last word.
     """
     p = np.clip(np.asarray(p, dtype=np.float64), 0.0, 1.0)
     for _ in range(p.shape[0] + 1):
@@ -286,8 +251,7 @@ def sample_slate_madow(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> n
 
     u = float(rng.random())
     thresholds = u + np.arange(L, dtype=np.float64)
-    # searchsorted with side='right' returns insertion index in cum;
-    # subtract 1 to get the bucket index.
+    # searchsorted with side='right' returns insertion index in cum; subtract 1 to get the bucket index.
     bucket = np.searchsorted(cum, thresholds, side="right") - 1
     bucket = np.clip(bucket, 0, K - 1)
 
@@ -305,13 +269,11 @@ def sample_slate_depround(p_bar: np.ndarray, L: int,
 
     Converts a marginal distribution ``p_bar in [0,1]^K`` with ``sum(p_bar) == L`` into a 0/1 slate of size exactly L such that each item k is included with probability exactly ``p_bar[k]``.
 
-    Pair-update rule: while two coordinates p_i, p_j are both in (0, 1), let alpha = min(1 - p_i, p_j) and beta = min(p_i, 1 - p_j); with probability beta/(alpha+beta) take the "alpha move" (p_i += alpha, p_j -= alpha), else the "beta move" (p_i -= beta, p_j += beta). Each iteration drives at least one of {p_i, p_j} to {0, 1}, so the loop terminates in <= K iterations. Item-level marginals and the total sum are preserved exactly in expectation; under floating-point arithmetic the sum is preserved to within ~1e-12, and any residual
-    drift is snapped at the end via top-L selection.
+    Pair-update rule: while two coordinates p_i, p_j are both in (0, 1), let alpha = min(1 - p_i, p_j) and beta = min(p_i, 1 - p_j); with probability beta/(alpha+beta) take the "alpha move" (p_i += alpha, p_j -= alpha), else the "beta move" (p_i -= beta, p_j += beta). Each iteration drives at least one of {p_i, p_j} to {0, 1}, so the loop terminates in <= K iterations. Item-level marginals and the total sum are preserved exactly in expectation; under floating-point arithmetic the sum is preserved to within ~1e-12, and any residual drift is snapped at the end via top-L selection.
 
     Compared to Madow systematic sampling (``sample_slate_madow``):
       * Same marginal guarantee (P[k in S] = p_bar[k]).
-      * Different joint law -- DepRound has weaker negative correlation
-        between distinct items, but is still negatively associated.
+      * Different joint law -- DepRound has weaker negative correlation between distinct items, but is still negatively associated.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -324,8 +286,7 @@ def sample_slate_depround(p_bar: np.ndarray, L: int,
     fractional = np.where((p > EPS) & (p < 1 - EPS))[0].tolist()
     iters = 0
     while len(fractional) >= 2 and iters < 4 * K:
-        # Pop two fractional indices; update them; push back any that
-        # remain fractional.
+        # Pop two fractional indices; update them; push back any that remain fractional.
         i = fractional.pop()
         j = fractional.pop()
         alpha = min(1.0 - p[i], p[j])

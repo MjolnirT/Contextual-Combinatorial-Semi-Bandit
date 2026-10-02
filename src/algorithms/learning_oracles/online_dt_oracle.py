@@ -71,8 +71,7 @@ class OnlineDTOracle:
     def predict(self, features):
         f = self._normalize(features)
         F = self._ensemble_predict(f)
-        # Match the torch oracle's contract: return predictions in the
-        # original-y scale so IGW sees scores comparable to true rewards.
+        # Match the torch oracle's contract: return predictions in the original-y scale so IGW sees scores comparable to true rewards.
         return F * self.y_scale
 
     def step(self, phi_played, y_played):
@@ -92,8 +91,7 @@ class OnlineDTOracle:
         if self.step_count % self.fit_every != 0:
             return 0.0
 
-        # Functional-gradient step: fit one tree to the negative gradient
-        # of the squared loss (= residual) over the current buffer.
+        # Functional-gradient step: fit one tree to the negative gradient of the squared loss (= residual) over the current buffer.
         F_buf = self._ensemble_predict(self.buffer_phi)
         residual = self.buffer_y - F_buf
 

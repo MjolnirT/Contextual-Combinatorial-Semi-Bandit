@@ -1,18 +1,15 @@
 """
-RegCB — direct port of ``RegressorUCB`` from
-``example_code_regcb/Semibandits.py`` (Dylan Foster's 2017 prototype on the ``regression`` branch of akshaykr/oracle_cb), which became RegCB in Foster, Agarwal, Dudík, Luo, Schapire, ICML 2018, "Practical Contextual Bandits with Regression Oracles".
+RegCB — direct port of ``RegressorUCB`` from ``example_code_regcb/Semibandits.py`` (Dylan Foster's 2017 prototype on the ``regression`` branch of akshaykr/oracle_cb), which became RegCB in Foster, Agarwal, Dudík, Luo, Schapire, ICML 2018, "Practical Contextual Bandits with Regression Oracles".
 
 Restricted to the contextual bandit setting (L=1).
 
 Pull strategies (from the prototype's ``STRATEGIES``):
   * ``greedy``            ≡ paper's RegCB-opt   (``argmax_a UCB(x,a)``)
-  * ``pull_if_uncertain`` ≡ paper's RegCB-elim  (uniform over
-                             ``{a : UCB(a) >= max_a' LCB(a')}``)
+  * ``pull_if_uncertain`` ≡ paper's RegCB-elim  (uniform over ``{a : UCB(a) >= max_a' LCB(a')}``)
 
 Oracles (incremental regressors with a ``pred_range`` confidence band):
   * ``lin``  → ``Incremental.IncrementalLinearRegression(reg=1.)``
-  * ``gb5``  → ``Incremental.IncrementalRegressionTreeEnsemble2(
-                     max_depth=5, n_estimators=100)``
+  * ``gb5``  → ``Incremental.IncrementalRegressionTreeEnsemble2(max_depth=5, n_estimators=100)``
 
 The runner (``run_semibandits.py``) passes ``--param`` as ``radius`` (the empirical-least-squares-regret slack β in the paper) and ``--regcb_mode`` as the pull strategy. All other RegressorUCB defaults (``burn_in=200``, ``cheat=True``, ``stack_actions=False``, ``prec=0.001``) are kept verbatim.
 """
@@ -37,8 +34,7 @@ class RegCB(Semibandit):
         """
         Args:
             B           -- Semibandit Simulator (must have L==1).
-            learning_alg -- one of {'lin', 'gb5'}, or a callable factory
-                            returning an Incremental regressor instance.
+            learning_alg -- one of {'lin', 'gb5'}, or a callable factory returning an Incremental regressor instance.
             classification -- not supported (kept for runner compatibility).
         """
         if classification:
@@ -64,8 +60,7 @@ class RegCB(Semibandit):
     # ------------------------------------------------------------------ #
     def init(self, T, params=None):
         """
-        Initialize the run. Maps runner params onto the original
-        RegressorUCB knobs:
+        Initialize the run. Maps runner params onto the original RegressorUCB knobs:
           --param / 'beta'      → self.radius
           --regcb_mode          → self.pull_strategy
                                     'optimistic'  → 'greedy'
@@ -253,8 +248,7 @@ class RegCB(Semibandit):
     # ------------------------------------------------------------------ #
     def _binary_search(self, model, x, radius, r, prec, lmin, lmax, min_mse):
         """
-        Binary search over the inverse Lagrange multiplier ``1/lt`` for the
-        constrained least-squares problem of (Foster et al. 2018) Algorithm 3.
+        Binary search over the inverse Lagrange multiplier ``1/lt`` for the constrained least-squares problem of (Foster et al. 2018) Algorithm 3.
 
         Args:
             r -- target reward value (rmin or rmax) we try to match.

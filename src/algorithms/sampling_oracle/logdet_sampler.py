@@ -19,8 +19,7 @@ with
     N = C(K, L), the number of size-L subsets of [K],
     a_n = sum_{i in S_n} e_i in R^K (multi-hot row vector),
     ā_p = sum_n p_n a_n in R^K (per-arm marginals; sum to L),
-    H_p = sum_n p_n a_n a_n^T in R^{K x K} (diagonal = marginals,
-          off-diagonal = pairwise co-occurrence probabilities).
+    H_p = sum_n p_n a_n a_n^T in R^{K x K} (diagonal = marginals, off-diagonal = pairwise co-occurrence probabilities).
 
 The objective is convex (linear + composition of -log det with an affine map), solved by Frank-Wolfe over the (K choose L)-simplex; per-iteration work is dominated by inverting the K x K matrix H_p (so the cost is in K, not N).
 """
@@ -147,8 +146,7 @@ def logdet_sample_slate(
         A_feat, f, gamma, max_iter=max_iter, tol=tol, ridge=ridge
     )
 
-    # Categorical draw; numpy needs an exact-sum-to-1 vector, so we already
-    # renormalized inside _solve_logdet.
+    # Categorical draw; numpy needs an exact-sum-to-1 vector, so we already renormalized inside _solve_logdet.
     n_sampled = int(rng.choice(N, p=q))
     slate = subsets[n_sampled].copy()
     return slate, q, n_sampled

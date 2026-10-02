@@ -11,16 +11,11 @@ class EpsGreedyValue(Semibandit):
     Epsilon-greedy over slates with an online per-arm regression oracle.
 
     Each round:
-      1. Predict per-arm rewards f_hat(phi_k) for all K arms via the
-         online regressor (same oracle interface as ``SquareCB``).
-      2. With probability epsilon, play a uniformly random size-L slate
-         (pure exploration over the candidate slate set). Otherwise, play
-         the greedy slate: the L arms with the highest predicted reward.
-      3. After observing per-arm rewards y on the played arms A, take one
-         MSE gradient step on (phi[A], y) — same update as ``SquareCB``.
+      1. Predict per-arm rewards f_hat(phi_k) for all K arms via the online regressor (same oracle interface as ``SquareCB``).
+      2. With probability epsilon, play a uniformly random size-L slate (pure exploration over the candidate slate set). Otherwise, play the greedy slate: the L arms with the highest predicted reward.
+      3. After observing per-arm rewards y on the played arms A, take one MSE gradient step on (phi[A], y) — same update as ``SquareCB``.
 
-    Restricted to ``RegressionPolicy``: per-arm features must be available
-    via ``x.get_ld_features()``.
+    Restricted to ``RegressionPolicy``: per-arm features must be available via ``x.get_ld_features()``.
     """
 
     def __init__(self, B, learning_alg=None, classification=False):

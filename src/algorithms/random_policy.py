@@ -5,14 +5,11 @@ from .base import Semibandit
 
 class RandomPolicy(Semibandit):
     """
-    Uniform-random slate baseline: at each round, pick a size-L subset of
-    {1, ..., K} uniformly at random and do no learning.
+    Uniform-random slate baseline: at each round, pick a size-L subset of {1, ..., K} uniformly at random and do no learning.
 
-    Subclassed from Semibandit for the get_action / play loop, but overrides
-    init to skip the self.B.N reference (which DatasetBandit does not set).
+    Subclassed from Semibandit for the get_action / play loop, but overrides init to skip the self.B.N reference (which DatasetBandit does not set).
 
-    Slate selection uses a per-run seeded RNG (``params['seed']``) so the
-    reward trace is reproducible for a given seed and differs across seeds.
+    Slate selection uses a per-run seeded RNG (``params['seed']``) so the reward trace is reproducible for a given seed and differs across seeds.
     """
 
     def init(self, T, params=None):
