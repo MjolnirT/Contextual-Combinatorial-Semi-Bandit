@@ -10,8 +10,8 @@ Given estimated per-item rewards f_hat (shape K), an exploration parameter gamma
 
 The program itself is solved by a pluggable back-end, selected through the ``solver`` argument of ``igw_marginals``:
 
-  * ``None`` (default) / ``'closed_form'`` -- ``_solve_closed_form``: the analytic KKT solution, a 1-D root find (``scipy.optimize.brentq``) inside a saturation loop. No dependency beyond scipy; this is what every experiment in the repo runs.
-  * ``'cvxpy'`` -- ``_solve_cvxpy``: hands the same program to CVXPY as a generic convex program. Reference / cross-check path only: CVXPY is an OPTIONAL dependency (imported lazily, so the module still imports without it) and is orders of magnitude slower per call than the closed form.
+  * ``None`` (default) / ``'cvxpy'`` -- ``_solve_cvxpy``: hands the program to CVXPY as a generic convex program. CVXPY is included in requirements.txt and imported lazily.
+  * ``'closed_form'`` -- ``_solve_closed_form``: the analytic KKT solution, a 1-D root find (``scipy.optimize.brentq``) inside a saturation loop. No dependency beyond scipy.
   * any callable ``solver(f_hat, gamma, L) -> p_bar``, as before.
 
 Back-ends are registered in ``IGW_SOLVERS``; both built-ins are exact drop-in callables (they short-circuit the same degenerate inputs), so they may also be called directly.
@@ -40,7 +40,7 @@ def igw_marginals(
         max_p   <p, f_hat>  +  (1/gamma) * sum_k log(p_k)
         s.t.    sum_k p_k = L,    0 < p_k <= 1.
 
-    ``solver`` picks the back-end that solves it: ``None`` (default) or ``'closed_form'`` for the analytic KKT solve, ``'cvxpy'`` for the CVXPY cross-check, or any callable ``(f_hat, gamma, L) -> p_bar``. Whatever the back-end, the returned marginals are checked by ``_validate_marginals``.
+    ``solver`` picks the back-end that solves it: ``None`` (default) or ``'cvxpy'`` for the CVXPY solve, ``'closed_form'`` for the analytic KKT solve, or any callable ``(f_hat, gamma, L) -> p_bar``. Whatever the back-end, the returned marginals are checked by ``_validate_marginals``.
     """
     if solver is None:
         solver = DEFAULT_IGW_SOLVER
@@ -85,7 +85,7 @@ def _degenerate_marginals(f_hat: np.ndarray, gamma: float,
 
 def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
     """
-    Analytic KKT solve (the default back-end).
+    Analytic KKT solve, selected with solver='closed_form'.
 
     With gap_k = f_max - f_hat_k (>= 0), the KKT optimum for uncapped items is p_k = 1 / (gamma * (u + gap_k)) where u = lambda - f_max > 0 solves the 1-D equation
 
@@ -153,7 +153,7 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     """
     CVXPY back-end: the same program handed to a generic convex solver.
 
-    ``cvxpy_solver`` forwards a solver name (e.g. 'CLARABEL', 'SCS', 'ECOS'), defaulting to CLARABEL when installed -- CVXPY's own pick for this exponential-cone program. Since the point of this back-end is to check the closed form, it also tightens that solver's tolerances (``_CVXPY_TIGHT_DEFAULTS``): at stock tolerances the two agree only to ~1e-5, tightened to ~1e-10, at no measurable cost. Anything passed in ``solve_kwargs`` wins over those defaults. Interior-point output still only satisfies the constraints to solver tolerance, so it is repaired onto the exact box/sum before ``_validate_marginals`` sees it.
+    ``cvxpy_solver`` forwards a solver name (e.g. 'CLARABEL', 'SCS', 'ECOS'), defaulting to CLARABEL when installed. Solver tolerances are tightened through ``_CVXPY_TIGHT_DEFAULTS`` for agreement with the analytic solution. Anything passed in ``solve_kwargs`` wins over those defaults. Interior-point output still only satisfies the constraints to solver tolerance, so it is repaired onto the exact box/sum before ``_validate_marginals`` sees it.
 
     Requesting 1e-12 is deliberately more than CLARABEL can always deliver on the near-degenerate barrier (small gamma * a nearly-saturated coordinate), so a minority of calls stop at ``OPTIMAL_INACCURATE`` and CVXPY emits "Solution may be inaccurate". Those answers are still the most accurate of any tolerance setting measured (~1e-6 vs ~5e-5 at 1e-10), which is why the status is accepted rather than raised on.
     """
@@ -164,10 +164,10 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
 
     try:
         import cvxpy as cp
-    except ImportError as exc:  # optional dependency
+    except ImportError as exc:
         raise ImportError(
-            "the 'cvxpy' IGW solver needs the optional cvxpy package "
-            "(pip install cvxpy). The default solver ('closed_form') has no "
+            "the default 'cvxpy' IGW solver needs the cvxpy package "
+            "(pip install cvxpy). The alternative solver ('closed_form') has no "
             "dependency beyond scipy."
         ) from exc
 
@@ -225,7 +225,7 @@ IGW_SOLVERS: dict = {
     "closed_form": _solve_closed_form,
     "cvxpy": _solve_cvxpy,
 }
-DEFAULT_IGW_SOLVER = "closed_form"
+DEFAULT_IGW_SOLVER = "cvxpy"
 
 
 def sample_slate_madow(p_bar: np.ndarray, L: int, rng: np.random.Generator) -> np.ndarray:

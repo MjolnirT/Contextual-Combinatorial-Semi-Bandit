@@ -21,12 +21,15 @@ with
     ā_p = sum_n p_n a_n in R^K (per-arm marginals; sum to L),
     H_p = sum_n p_n a_n a_n^T in R^{K x K} (diagonal = marginals, off-diagonal = pairwise co-occurrence probabilities).
 
-The objective is convex (linear + composition of -log det with an affine map), solved by Frank-Wolfe over the (K choose L)-simplex; per-iteration work is dominated by inverting the K x K matrix H_p (so the cost is in K, not N).
+The objective is convex (linear + composition of -log det with an affine map). Both back-ends include the same ridge regularization H_p + ridge * I: ``'cvxpy'`` (default) models the program directly with CVXPY's log_det atom, while ``'frank_wolfe'`` preserves the original iterative algorithm. Both enumerate all C(K, L) super-actions. Select a back-end by name or supply a callable with the same arguments as _solve_frank_wolfe.
 """
 
 import numpy as np
 from itertools import combinations
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
+
+SolverFn = Callable[..., np.ndarray]
+SolverLike = Union[str, SolverFn, None]
 
 _SUBSET_CACHE: dict = {}
 _FEATURE_CACHE: dict = {}
@@ -57,7 +60,7 @@ def _enumerate_features(K: int, L: int) -> np.ndarray:
     return cached
 
 
-def _solve_logdet(
+def _solve_frank_wolfe(
     A_feat: np.ndarray,
     f: np.ndarray,
     gamma: float,
@@ -112,6 +115,111 @@ def _solve_logdet(
     return q
 
 
+def _solve_cvxpy(
+    A_feat: np.ndarray,
+    f: np.ndarray,
+    gamma: float,
+    max_iter: int = 80,
+    tol: float = 1e-5,
+    ridge: float = 1e-6,
+    *,
+    cvxpy_solver: Optional[str] = None,
+    **solve_kwargs,
+) -> np.ndarray:
+    """Solve the same ridge-regularized log-det program directly with CVXPY.
+
+    Prefer CLARABEL when available, otherwise SCS. For these solvers, max_iter caps solver iterations and tol sets solver feasibility/gap tolerances (rather than the Frank-Wolfe duality gap). Explicit solve_kwargs override these defaults. Other CVXPY solvers use their own option names/defaults. The optimal q need not be unique; compare objectives, not individual weights.
+    """
+    A_feat = np.asarray(A_feat, dtype=np.float64)
+    f = np.asarray(f, dtype=np.float64)
+    N, K = A_feat.shape
+    if gamma <= 0 or N == 1:
+        return np.full(N, 1.0 / N, dtype=np.float64)
+
+    rewards = A_feat @ f
+    if np.isposinf(gamma):
+        # The exploration term vanishes, leaving a linear simplex problem.
+        q = (rewards == np.max(rewards)).astype(np.float64)
+        return q / q.sum()
+
+    import cvxpy as cp
+
+    q = cp.Variable(N, nonneg=True, name="q")
+    # Row scaling avoids constructing an N x N diagonal matrix.
+    H = A_feat.T @ cp.multiply(cp.reshape(q, (N, 1), order="C"), A_feat)
+    H = H + ridge * np.eye(K)
+    problem = cp.Problem(
+        cp.Minimize(-(rewards @ q) - cp.log_det(H) / float(gamma)),
+        [cp.sum(q) == 1.0],
+    )
+    if cvxpy_solver is None:
+        cvxpy_solver = "CLARABEL" if "CLARABEL" in cp.installed_solvers() else "SCS"
+    defaults = {
+        "CLARABEL": {"max_iter": max_iter, "tol_gap_abs": tol,
+                     "tol_gap_rel": tol, "tol_feas": tol},
+        "SCS": {"max_iters": max_iter, "eps": tol},
+    }
+    for key, value in defaults.get(cvxpy_solver, {}).items():
+        solve_kwargs.setdefault(key, value)
+    problem.solve(solver=cvxpy_solver, **solve_kwargs)
+    if q.value is None or problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+        raise RuntimeError(
+            "cvxpy failed on the log-det program "
+            f"(status={problem.status!r}, gamma={gamma}, N={N}, K={K})"
+        )
+
+    # Repair numerical constraint drift before numpy's categorical draw.
+    result = np.asarray(q.value, dtype=np.float64).ravel()
+    if not np.all(np.isfinite(result)) or np.min(result) < -max(tol, 1e-7):
+        raise RuntimeError("cvxpy returned an invalid log-det distribution")
+    result = np.maximum(result, 0.0)
+    total = float(result.sum())
+    if total <= 0.0 or abs(total - 1.0) > max(10 * tol, 1e-6):
+        raise RuntimeError("cvxpy returned an invalid log-det distribution sum")
+    return result / total
+
+
+LOGDET_SOLVERS: dict = {
+    "frank_wolfe": _solve_frank_wolfe,
+    "cvxpy": _solve_cvxpy,
+}
+DEFAULT_LOGDET_SOLVER = "cvxpy"
+
+
+def _solve_logdet(
+    A_feat: np.ndarray,
+    f: np.ndarray,
+    gamma: float,
+    max_iter: int = 80,
+    tol: float = 1e-5,
+    ridge: float = 1e-6,
+    *,
+    solver: SolverLike = None,
+) -> np.ndarray:
+    """Dispatch a log-det solve, retaining the original positional arguments.
+
+    None selects DEFAULT_LOGDET_SOLVER. A callable receives (A_feat, f, gamma, max_iter=..., tol=..., ridge=...) and returns q of shape (N,).
+    """
+    if solver is None:
+        solver = DEFAULT_LOGDET_SOLVER
+    if not callable(solver):
+        key = str(solver).strip().lower()
+        if key not in LOGDET_SOLVERS:
+            raise ValueError(
+                f"unknown log-det solver {solver!r}; expected one of "
+                f"{sorted(LOGDET_SOLVERS)} or a callable"
+            )
+        solver = LOGDET_SOLVERS[key]
+    q = np.asarray(
+        solver(A_feat, f, gamma, max_iter=max_iter, tol=tol, ridge=ridge),
+        dtype=np.float64,
+    )
+    if (q.shape != (A_feat.shape[0],) or not np.all(np.isfinite(q))
+            or np.any(q < 0.0) or abs(float(q.sum()) - 1.0) > 1e-8):
+        raise RuntimeError("log-det solver must return a finite nonnegative distribution of shape (N,) summing to 1")
+    return q
+
+
 def logdet_sample_slate(
     f: np.ndarray,
     gamma: float,
@@ -120,8 +228,12 @@ def logdet_sample_slate(
     max_iter: int = 80,
     tol: float = 1e-5,
     ridge: float = 1e-6,
+    *,
+    solver: SolverLike = None,
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """Sample a size-L slate via the simplified logdet-barrier program.
+
+    solver selects 'cvxpy' (default), 'frank_wolfe', or a compatible callable. Existing positional arguments and the returned tuple are unchanged.
 
     Returns (slate, q, n_sampled):
         slate      -- length-L int64 array of arm indices.
@@ -143,7 +255,7 @@ def logdet_sample_slate(
         return subsets[0].copy(), np.ones(1, dtype=np.float64), 0
 
     q = _solve_logdet(
-        A_feat, f, gamma, max_iter=max_iter, tol=tol, ridge=ridge
+        A_feat, f, gamma, max_iter=max_iter, tol=tol, ridge=ridge, solver=solver
     )
 
     # Categorical draw; numpy needs an exact-sum-to-1 vector, so we already renormalized inside _solve_logdet.
