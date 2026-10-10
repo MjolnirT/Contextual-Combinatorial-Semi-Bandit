@@ -87,11 +87,11 @@ def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
     """
     Analytic KKT solve (the default back-end).
 
-    With coef = 1/gamma and gap_k = f_max - f_hat_k (>= 0), the KKT optimum is p_k = coef / (u + gap_k) where u = lambda - f_max > 0 solves the 1-D equation
+    With gap_k = f_max - f_hat_k (>= 0), the KKT optimum for uncapped items is p_k = 1 / (gamma * (u + gap_k)) where u = lambda - f_max > 0 solves the 1-D equation
 
-        sum_k 1/(u + gap_k) = L_rem / coef.
+        sum_k 1/(u + gap_k) = gamma * L_rem.
 
-    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -L_rem/coef < 0, so brentq finds the unique root. Items whose p_k would exceed 1 are pinned to 1 and the remainder re-solved (saturation loop terminates because each pass pins at least one new item).
+    h(u) = LHS - RHS is strictly decreasing on (0, +inf) with h(0+) = +inf (top-of-remaining item has gap=0 -> 1/u) and h(+inf) = -gamma * L_rem < 0, so brentq finds the unique root. Items whose p_k would exceed 1 are pinned to 1 and the remainder re-solved (saturation loop terminates because each pass pins at least one new item).
     """
     f_hat = np.asarray(f_hat, dtype=np.float64)
     K = f_hat.shape[0]
@@ -99,7 +99,7 @@ def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
     if degenerate is not None:
         return degenerate
 
-    coef = 1.0 / float(gamma)
+    gamma = float(gamma)
     saturated = np.zeros(K, dtype=bool)
     p = np.zeros(K, dtype=np.float64)
 
@@ -121,7 +121,7 @@ def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
         f_max = float(np.max(f_idx))
         gap = f_max - f_idx  # >= 0; top-of-remaining items have gap 0
 
-        target = L_rem / coef
+        target = gamma * L_rem
 
         def h(u: float) -> float:
             return float(np.sum(1.0 / (u + gap))) - target
@@ -133,7 +133,7 @@ def _solve_closed_form(f_hat: np.ndarray, gamma: float, L: int) -> np.ndarray:
             u_hi *= 2.0
 
         u_root = float(brentq(h, u_lo, u_hi, xtol=1e-14))  # type: ignore[arg-type]
-        p_idx = coef / (u_root + gap)
+        p_idx = 1.0 / (gamma * (u_root + gap))
 
         over = p_idx > 1.0
         if np.any(over):
