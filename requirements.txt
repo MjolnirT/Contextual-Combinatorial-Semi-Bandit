@@ -1,5 +1,6 @@
 numpy>=1.26,<3
 scipy>=1.13
+cvxpy>=1.5
 scikit-learn>=1.4
 xgboost>=2.0
 pandas>=2.0
