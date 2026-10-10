@@ -128,7 +128,17 @@ def _solve_cvxpy(
 ) -> np.ndarray:
     """Solve the same ridge-regularized log-det program directly with CVXPY.
 
-    Prefer CLARABEL when available, otherwise SCS. For these solvers, max_iter caps solver iterations and tol sets solver feasibility/gap tolerances (rather than the Frank-Wolfe duality gap). Explicit solve_kwargs override these defaults. Other CVXPY solvers use their own option names/defaults. The optimal q need not be unique; compare objectives, not individual weights.
+    Prefer CLARABEL when available, otherwise SCS. Automatic selection retries
+    with SCS if CLARABEL raises SolverError; an explicitly requested solver is
+    not changed. The retry uses at least 50,000 iterations, since SCS typically
+    needs more iterations than an interior-point solver. Otherwise max_iter
+    caps solver iterations and tol sets feasibility/gap tolerances. Explicit
+    solve_kwargs override the primary solver defaults. The optimal q need not
+    be unique; compare objectives, not individual weights.
+
+    For positive ridge, remove null directions of A_feat before taking log_det.
+    Their contribution is the constant (K - rank) * log(ridge), so this keeps
+    the optimizer while avoiding a poorly conditioned, larger PSD cone.
     """
     A_feat = np.asarray(A_feat, dtype=np.float64)
     f = np.asarray(f, dtype=np.float64)
@@ -144,15 +154,28 @@ def _solve_cvxpy(
 
     import cvxpy as cp
 
+    moment_features = A_feat
+    if ridge > 0:
+        _, singular_values, right_vectors = np.linalg.svd(A_feat, full_matrices=False)
+        cutoff = max(A_feat.shape) * np.finfo(np.float64).eps * singular_values[0]
+        rank = int(np.count_nonzero(singular_values > cutoff))
+        if rank == 0:
+            return np.full(N, 1.0 / N, dtype=np.float64)
+        if rank < K:
+            moment_features = A_feat @ right_vectors[:rank].T
+    dimension = moment_features.shape[1]
     q = cp.Variable(N, nonneg=True, name="q")
     # Row scaling avoids constructing an N x N diagonal matrix.
-    H = A_feat.T @ cp.multiply(cp.reshape(q, (N, 1), order="C"), A_feat)
-    H = H + ridge * np.eye(K)
+    H = moment_features.T @ cp.multiply(cp.reshape(q, (N, 1), order="C"), moment_features)
+    H = H + ridge * np.eye(dimension)
+    # Subtracting a constant reward on the simplex preserves the optimizer.
+    rewards = rewards - rewards.max()
     problem = cp.Problem(
         cp.Minimize(-(rewards @ q) - cp.log_det(H) / float(gamma)),
         [cp.sum(q) == 1.0],
     )
-    if cvxpy_solver is None:
+    automatic_solver = cvxpy_solver is None
+    if automatic_solver:
         cvxpy_solver = "CLARABEL" if "CLARABEL" in cp.installed_solvers() else "SCS"
     defaults = {
         "CLARABEL": {"max_iter": max_iter, "tol_gap_abs": tol,
@@ -161,7 +184,13 @@ def _solve_cvxpy(
     }
     for key, value in defaults.get(cvxpy_solver, {}).items():
         solve_kwargs.setdefault(key, value)
-    problem.solve(solver=cvxpy_solver, **solve_kwargs)
+    try:
+        problem.solve(solver=cvxpy_solver, **solve_kwargs)
+    except cp.error.SolverError:
+        if not (automatic_solver and cvxpy_solver == "CLARABEL"
+                and "SCS" in cp.installed_solvers()):
+            raise
+        problem.solve(solver="SCS", max_iters=max(50_000, max_iter), eps=tol)
     if q.value is None or problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
         raise RuntimeError(
             "cvxpy failed on the log-det program "

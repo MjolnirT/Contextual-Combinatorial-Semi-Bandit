@@ -27,7 +27,7 @@ class SquareCBLin(Semibandit):
 
     Each round:
       1. Predict per-item rewards f_hat(phi_k) for all K arms via the online regressor; a super-action's predicted reward is the sum over its arms (linear in the summed features).
-      2. Solve the log-det program over the C(K, L) super-action simplex (Frank-Wolfe; see ``logdet_sampler``) and sample a slate from the resulting distribution q.
+      2. Solve the log-det program over the C(K, L) super-action simplex (CVXPY by default, or params['solver']='frank_wolfe'; see ``logdet_sampler``) and sample a slate from the resulting distribution q.
       3. Observe ONLY the slate reward r; take one MSE gradient step on the single sample (sum_{k in A} phi_k, r).
     """
 
@@ -46,6 +46,7 @@ class SquareCBLin(Semibandit):
 
         self.gamma_multiplier = float(params.get('gamma_multiplier', 1.0))
         self.gamma_schedule = params.get('gamma_schedule', 'sqrt_kt')
+        self.solver = params.get('solver', None)
 
         seed = params.get('seed', None)
         self.rng = np.random.default_rng(seed)
@@ -72,13 +73,13 @@ class SquareCBLin(Semibandit):
     def _gamma(self) -> float:
         if callable(self.gamma_schedule):
             return float(self.gamma_schedule(self.t, self.B.K, self.B.L))  # type: ignore[arg-type]
-        return self.gamma_multiplier * np.sqrt(self.B.K * self.t / self.B.L)
+        return self.gamma_multiplier * np.sqrt(self.B.K * self.t / self.B.L**2)
 
     def get_action(self, x):
         L = x.get_L()
         features = np.asarray(x.get_ld_features(), dtype=np.float64)
         f = self._build_model(features.shape[1]).predict(features)
-        slate, q, _ = logdet_sample_slate(f, self._gamma(), L, self.rng)
+        slate, q, _ = logdet_sample_slate(f, self._gamma(), L, self.rng, solver=self.solver)
         # Per-arm marginals of q, for logging parity with SquareCB.
         self.imp_weights = q @ _logdet_features(int(f.shape[0]), L)
         self.action = slate
