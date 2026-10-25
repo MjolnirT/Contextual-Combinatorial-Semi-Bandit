@@ -153,10 +153,21 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     """
     CVXPY back-end: the same program handed to a generic convex solver.
 
-    ``cvxpy_solver`` forwards a solver name (e.g. 'CLARABEL', 'SCS', 'ECOS'), defaulting to CLARABEL when installed. Solver tolerances are tightened through ``_CVXPY_TIGHT_DEFAULTS`` for agreement with the analytic solution. Anything passed in ``solve_kwargs`` wins over those defaults. Interior-point output still only satisfies the constraints to solver tolerance, so it is repaired onto the exact box/sum before ``_validate_marginals`` sees it.
+    Use CLARABEL only and propagate solver failures without a retry.
+    ``cvxpy_solver`` accepts only None or 'CLARABEL'. Solver tolerances are
+    configured through ``_CLARABEL_DEFAULTS``. Anything passed in
+    ``solve_kwargs`` wins over those defaults. Interior-point output still
+    only satisfies the constraints to solver tolerance, so it is repaired
+    onto the exact box/sum before ``_validate_marginals`` sees it.
 
-    Requesting 1e-12 is deliberately more than CLARABEL can always deliver on the near-degenerate barrier (small gamma * a nearly-saturated coordinate), so a minority of calls stop at ``OPTIMAL_INACCURATE`` and CVXPY emits "Solution may be inaccurate". Those answers are still the most accurate of any tolerance setting measured (~1e-6 vs ~5e-5 at 1e-10), which is why the status is accepted rather than raised on.
+    CLARABEL uses 1e-8 for absolute gap, relative gap, and feasibility tolerances,
+    matching the default SquareCB.Lin CVXPY settings. Both ``OPTIMAL`` and
+    ``OPTIMAL_INACCURATE`` statuses are accepted before marginal repair.
     """
+    if cvxpy_solver not in (None, "CLARABEL"):
+        raise ValueError("The CVXPY backend supports only CLARABEL")
+    if solve_kwargs.pop("solver", "CLARABEL") != "CLARABEL":
+        raise ValueError("The CVXPY backend supports only CLARABEL")
     f_hat = np.asarray(f_hat, dtype=np.float64)
     degenerate = _degenerate_marginals(f_hat, gamma, L)
     if degenerate is not None:
@@ -167,7 +178,7 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     except ImportError as exc:
         raise ImportError(
             "the default 'cvxpy' IGW solver needs the cvxpy package "
-            "(pip install cvxpy). The alternative solver ('closed_form') has no "
+            "(pip install cvxpy-base clarabel). The alternative solver ('closed_form') has no "
             "dependency beyond scipy."
         ) from exc
 
@@ -178,13 +189,9 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
         cp.Maximize(gamma * (f_hat @ p) + cp.sum(cp.log(p))),
         [cp.sum(p) == float(L), p <= 1.0],
     )
-    if cvxpy_solver is None and "CLARABEL" in cp.installed_solvers():
-        cvxpy_solver = "CLARABEL"
-    if cvxpy_solver is not None:
-        solve_kwargs["solver"] = cvxpy_solver
-        for key, val in _CVXPY_TIGHT_DEFAULTS.get(cvxpy_solver, {}).items():
-            solve_kwargs.setdefault(key, val)
-    problem.solve(**solve_kwargs)
+    for key, val in _CLARABEL_DEFAULTS.items():
+        solve_kwargs.setdefault(key, val)
+    problem.solve(solver="CLARABEL", **solve_kwargs)
 
     if p.value is None or problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
         raise RuntimeError(
@@ -194,11 +201,9 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     return _repair_marginals(np.asarray(p.value, dtype=np.float64).ravel(), L)
 
 
-# Per-solver tolerance overrides for ``_solve_cvxpy`` -- see its docstring. A solver missing from this map just runs at its own defaults.
-_CVXPY_TIGHT_DEFAULTS = {
-    "CLARABEL": {"tol_gap_abs": 1e-12, "tol_gap_rel": 1e-12, "tol_feas": 1e-12},
-    "ECOS": {"abstol": 1e-12, "reltol": 1e-12, "feastol": 1e-12},
-    "SCS": {"eps": 1e-10, "max_iters": 50000},
+# CLARABEL tolerance defaults for ``_solve_cvxpy``.
+_CLARABEL_DEFAULTS = {
+    "tol_gap_abs": 1e-8, "tol_gap_rel": 1e-8, "tol_feas": 1e-8,
 }
 
 

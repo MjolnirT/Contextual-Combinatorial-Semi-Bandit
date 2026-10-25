@@ -21,7 +21,11 @@ with
     ā_p = sum_n p_n a_n in R^K (per-arm marginals; sum to L),
     H_p = sum_n p_n a_n a_n^T in R^{K x K} (diagonal = marginals, off-diagonal = pairwise co-occurrence probabilities).
 
-The objective is convex (linear + composition of -log det with an affine map). Both back-ends include the same ridge regularization H_p + ridge * I: ``'cvxpy'`` (default) models the program directly with CVXPY's log_det atom, while ``'frank_wolfe'`` preserves the original iterative algorithm. Both enumerate all C(K, L) super-actions. Select a back-end by name or supply a callable with the same arguments as _solve_frank_wolfe.
+The objective is convex (linear + composition of -log det with an affine map).
+The default ``'cvxpy'`` solves the log_det model with CLARABEL only,
+without a fallback solver. ``'frank_wolfe'`` retains the iterative method.
+All backends use H_p + ridge * I and enumerate all C(K, L) super-actions.
+Select a backend by name or supply a callable with the _solve_frank_wolfe signature.
 """
 
 import numpy as np
@@ -120,7 +124,7 @@ def _solve_cvxpy(
     f: np.ndarray,
     gamma: float,
     max_iter: int = 80,
-    tol: float = 1e-5,
+    tol: float = 1e-8,
     ridge: float = 1e-6,
     *,
     cvxpy_solver: Optional[str] = None,
@@ -128,18 +132,19 @@ def _solve_cvxpy(
 ) -> np.ndarray:
     """Solve the same ridge-regularized log-det program directly with CVXPY.
 
-    Prefer CLARABEL when available, otherwise SCS. Automatic selection retries
-    with SCS if CLARABEL raises SolverError; an explicitly requested solver is
-    not changed. The retry uses at least 50,000 iterations, since SCS typically
-    needs more iterations than an interior-point solver. Otherwise max_iter
+    Use CLARABEL only and propagate solver failures without a retry. max_iter
     caps solver iterations and tol sets feasibility/gap tolerances. Explicit
-    solve_kwargs override the primary solver defaults. The optimal q need not
+    solve_kwargs override the CLARABEL defaults. The optimal q need not
     be unique; compare objectives, not individual weights.
 
     For positive ridge, remove null directions of A_feat before taking log_det.
     Their contribution is the constant (K - rank) * log(ridge), so this keeps
     the optimizer while avoiding a poorly conditioned, larger PSD cone.
     """
+    if cvxpy_solver not in (None, "CLARABEL"):
+        raise ValueError("The CVXPY backend supports only CLARABEL")
+    if solve_kwargs.pop("solver", "CLARABEL") != "CLARABEL":
+        raise ValueError("The CVXPY backend supports only CLARABEL")
     A_feat = np.asarray(A_feat, dtype=np.float64)
     f = np.asarray(f, dtype=np.float64)
     N, K = A_feat.shape
@@ -174,36 +179,26 @@ def _solve_cvxpy(
         cp.Minimize(-(rewards @ q) - cp.log_det(H) / float(gamma)),
         [cp.sum(q) == 1.0],
     )
-    automatic_solver = cvxpy_solver is None
-    if automatic_solver:
-        cvxpy_solver = "CLARABEL" if "CLARABEL" in cp.installed_solvers() else "SCS"
     defaults = {
-        "CLARABEL": {"max_iter": max_iter, "tol_gap_abs": tol,
-                     "tol_gap_rel": tol, "tol_feas": tol},
-        "SCS": {"max_iters": max_iter, "eps": tol},
+        "max_iter": max_iter, "tol_gap_abs": tol,
+        "tol_gap_rel": tol, "tol_feas": tol,
     }
-    for key, value in defaults.get(cvxpy_solver, {}).items():
+    for key, value in defaults.items():
         solve_kwargs.setdefault(key, value)
-    try:
-        problem.solve(solver=cvxpy_solver, **solve_kwargs)
-    except cp.error.SolverError:
-        if not (automatic_solver and cvxpy_solver == "CLARABEL"
-                and "SCS" in cp.installed_solvers()):
-            raise
-        problem.solve(solver="SCS", max_iters=max(50_000, max_iter), eps=tol)
+    problem.solve(solver="CLARABEL", **solve_kwargs)
     if q.value is None or problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
         raise RuntimeError(
             "cvxpy failed on the log-det program "
             f"(status={problem.status!r}, gamma={gamma}, N={N}, K={K})"
         )
 
-    # Repair numerical constraint drift before numpy's categorical draw.
+    # Clip negative drift up to max(tol, 0.01), then check the sum and normalize.
     result = np.asarray(q.value, dtype=np.float64).ravel()
-    if not np.all(np.isfinite(result)) or np.min(result) < -max(tol, 1e-7):
+    if not np.all(np.isfinite(result)) or np.min(result) < -max(tol, 1e-2):
         raise RuntimeError("cvxpy returned an invalid log-det distribution")
     result = np.maximum(result, 0.0)
     total = float(result.sum())
-    if total <= 0.0 or abs(total - 1.0) > max(10 * tol, 1e-6):
+    if total <= 0.0 or abs(total - 1.0) > max(10 * tol, 1e-1):
         raise RuntimeError("cvxpy returned an invalid log-det distribution sum")
     return result / total
 
@@ -220,7 +215,7 @@ def _solve_logdet(
     f: np.ndarray,
     gamma: float,
     max_iter: int = 80,
-    tol: float = 1e-5,
+    tol: float = 1e-8,
     ridge: float = 1e-6,
     *,
     solver: SolverLike = None,
@@ -255,14 +250,14 @@ def logdet_sample_slate(
     L: int,
     rng: np.random.Generator,
     max_iter: int = 80,
-    tol: float = 1e-5,
+    tol: float = 1e-8,
     ridge: float = 1e-6,
     *,
     solver: SolverLike = None,
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """Sample a size-L slate via the simplified logdet-barrier program.
 
-    solver selects 'cvxpy' (default), 'frank_wolfe', or a compatible callable. Existing positional arguments and the returned tuple are unchanged.
+    solver selects 'cvxpy' (default, CLARABEL only), 'frank_wolfe', or a compatible callable. Existing positional arguments and the returned tuple are unchanged.
 
     Returns (slate, q, n_sampled):
         slate      -- length-L int64 array of arm indices.

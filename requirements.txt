@@ -1,6 +1,8 @@
 numpy>=1.26,<3
 scipy>=1.13
-cvxpy>=1.5
+# Solver-free CVXPY distribution; install CLARABEL explicitly below.
+cvxpy-base==1.9.3
+clarabel>=0.11.1
 scikit-learn>=1.4
 xgboost>=2.0
 pandas>=2.0

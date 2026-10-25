@@ -27,7 +27,7 @@ class SquareCBLin(Semibandit):
 
     Each round:
       1. Predict per-item rewards f_hat(phi_k) for all K arms via the online regressor; a super-action's predicted reward is the sum over its arms (linear in the summed features).
-      2. Solve the log-det program over the C(K, L) super-action simplex (CVXPY by default, or params['solver']='frank_wolfe'; see ``logdet_sampler``) and sample a slate from the resulting distribution q.
+      2. Solve the log-det program over the C(K, L) super-action simplex (CLARABEL only through CVXPY by default; override params['solver']; see ``logdet_sampler``) and sample a slate from the resulting distribution q.
       3. Observe ONLY the slate reward r; take one MSE gradient step on the single sample (sum_{k in A} phi_k, r).
     """
 

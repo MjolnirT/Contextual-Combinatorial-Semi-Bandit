@@ -26,6 +26,7 @@ import settings
 from algorithms import (EpsGreedy, EpsGreedyValue, LinUCB, MiniMonster,
                         SquareCB, SquareCBLin, RegCB, RandomPolicy,
                         SkylinePolicy)
+from algorithms.sampling_oracle.logdet_sampler import DEFAULT_LOGDET_SOLVER
 
 
 def parse_args():
@@ -67,8 +68,18 @@ def parse_args():
                              "rounding), or "
                              "'logdet' (simplified SquareCB.Lin: "
                              "convex log-det-barrier program over the "
-                             "C(K,L) super-action simplex, Frank-Wolfe "
-                             "solver, direct categorical draw).")
+                             "C(K,L) super-action simplex, CLARABEL only "
+                             "by default, direct categorical draw).")
+    parser.add_argument('--logdet_solver', default=None,
+                        choices=['cvxpy', 'frank_wolfe'],
+                        help="SquareCB.Lin solver (default: cvxpy, CLARABEL only); saves in a separate solver subdirectory.")
+    parser.add_argument('--igw_solver', default=None, choices=['cvxpy', 'closed_form'],
+                        help="SquareCB.Comb backend; explicit selections use a separate solver subdirectory.")
+    parser.add_argument('--normalize_features', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="SquareCB row-wise L2 normalization. Defaults to on for the "
+                             "linear oracle and off for other oracles, for both samplers. "
+                             "Feature modes use separate output directories.")
     parser.add_argument('--y_scale', action='store', default=1.0, type=float,
                         help="SquareCB target scaling: regressor trains on "
                              "y/y_scale and predicts in original-y units. "
@@ -136,7 +147,12 @@ def parse_args():
                              "search precision. Used as delta in pred_range "
                              "when cheat=True. Default: 0.001 (matches the "
                              "RegressorUCB prototype).")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.logdet_solver is not None and (args.alg != 'sqcb' or args.sampler != 'logdet'):
+        parser.error('--logdet_solver requires --alg sqcb --sampler logdet')
+    if args.igw_solver is not None and (args.alg != 'sqcb' or args.sampler == 'logdet'):
+        parser.error('--igw_solver requires --alg sqcb and a marginal/depround sampler')
+    return args
 
 
 def _xgb_overrides(Args):
@@ -198,6 +214,10 @@ def _run_and_save(out_prefix, seed, play_fn):
     np.savetxt(rewards_path, r)
     np.savetxt(f"{out_prefix}_validation_{seed}.out", val_tmp)
     np.savetxt(f"{out_prefix}_time_{seed}.out", np.array([stop - start]))
+    # Pseudo-regret trace (cumulative optimal label sum minus cumulative played
+    # reward, decimated like rewards). Computed from ground-truth labels in
+    # Semibandit.play and never passed to the learner.
+    np.savetxt(f"{out_prefix}_regret_{seed}.out", reg)
 
 
 def make_learning_alg(name):
@@ -405,6 +425,22 @@ def main():
                    'log_every': Args.log_every,
                    **_xgb_overrides(Args),
                    **_refit_overrides(Args)}
+        _normalize = Args.normalize_features
+        if _normalize is None:
+            _normalize = (sqcb_model_type == 'linear')
+        if _normalize is not None:
+            _params['normalize_features'] = _normalize
+            outdir = os.path.join(outdir, 'features_l2' if _normalize else 'features_raw', '')
+            os.makedirs(outdir, exist_ok=True)
+            print(f"SquareCB row-wise L2 normalization: {_normalize}", flush=True)
+        if Args.sampler == 'logdet':
+            _params['solver'] = Args.logdet_solver or DEFAULT_LOGDET_SOLVER
+            outdir = os.path.join(outdir, 'solver_' + _params['solver'], '')
+            os.makedirs(outdir, exist_ok=True)
+        elif Args.igw_solver is not None:
+            _params['solver'] = Args.igw_solver
+            outdir = os.path.join(outdir, 'solver_' + _params['solver'], '')
+            os.makedirs(outdir, exist_ok=True)
         _run_and_save(
             outdir + f"sqcb_{sqcb_file_alg}_{_suffix}", Args.I,
             lambda: S.play(Args.T, verbose=True, validate=Bval,
