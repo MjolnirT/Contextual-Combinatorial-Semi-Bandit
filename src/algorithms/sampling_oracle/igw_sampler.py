@@ -161,7 +161,8 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
     onto the exact box/sum before ``_validate_marginals`` sees it.
 
     CLARABEL uses 1e-8 for absolute gap, relative gap, and feasibility tolerances,
-    matching the default SquareCB.Lin CVXPY settings. Both ``OPTIMAL`` and
+    matching the default SquareCB.Lin CVXPY settings. max_step_fraction=0.95
+    avoids observed stalled interior-point steps. Both ``OPTIMAL`` and
     ``OPTIMAL_INACCURATE`` statuses are accepted before marginal repair.
     """
     if cvxpy_solver not in (None, "CLARABEL"):
@@ -204,6 +205,7 @@ def _solve_cvxpy(f_hat: np.ndarray, gamma: float, L: int,
 # CLARABEL tolerance defaults for ``_solve_cvxpy``.
 _CLARABEL_DEFAULTS = {
     "tol_gap_abs": 1e-8, "tol_gap_rel": 1e-8, "tol_feas": 1e-8,
+    "max_step_fraction": 0.95,
 }
 
 

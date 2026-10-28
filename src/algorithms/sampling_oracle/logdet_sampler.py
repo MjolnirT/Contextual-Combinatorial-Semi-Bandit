@@ -133,7 +133,8 @@ def _solve_cvxpy(
     """Solve the same ridge-regularized log-det program directly with CVXPY.
 
     Use CLARABEL only and propagate solver failures without a retry. max_iter
-    caps solver iterations and tol sets feasibility/gap tolerances. Explicit
+    caps solver iterations and tol sets feasibility/gap tolerances. The default
+    max_step_fraction=0.95 avoids observed stalled interior-point steps. Explicit
     solve_kwargs override the CLARABEL defaults. The optimal q need not
     be unique; compare objectives, not individual weights.
 
@@ -182,6 +183,7 @@ def _solve_cvxpy(
     defaults = {
         "max_iter": max_iter, "tol_gap_abs": tol,
         "tol_gap_rel": tol, "tol_feas": tol,
+        "max_step_fraction": 0.95,
     }
     for key, value in defaults.items():
         solve_kwargs.setdefault(key, value)
