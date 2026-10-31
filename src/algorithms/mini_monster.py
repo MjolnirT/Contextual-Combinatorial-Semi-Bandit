@@ -145,7 +145,8 @@ class MiniMonster(Semibandit):
         a = self.mu
         b = self.mu*np.sqrt(self.B.K)/np.sqrt(self.B.L*self.t)
         c = np.min([a,b])
-        return np.min([1,c])
+        # This is the exploration fraction K * mu_t in the VCEE paper.
+        return np.min([0.5,c])
 
     def _hash_list(self, lst):
         """
